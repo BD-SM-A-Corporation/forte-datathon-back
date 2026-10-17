@@ -30,6 +30,9 @@ class LocalQwen:
         started = time.monotonic()
         try:
             import torch
+            from lmformatenforcer.integrations.transformers import (
+                build_token_enforcer_tokenizer_data,
+            )
             from transformers import (
                 AutoProcessor,
                 BitsAndBytesConfig,
@@ -51,6 +54,7 @@ class LocalQwen:
                     load_in_4bit=settings.model_quantization == "4bit",
                     load_in_8bit=settings.model_quantization == "8bit",
                     bnb_4bit_compute_dtype=dtype,
+                    bnb_4bit_quant_type="nf4",
                 )
             self.processor = AutoProcessor.from_pretrained(
                 str(path),
@@ -59,6 +63,8 @@ class LocalQwen:
                 min_pixels=4 * 28 * 28,
                 max_pixels=settings.inference_max_side**2,
             )
+            # Build the vocabulary tree once; each window gets its own JSON parser.
+            self.tokenizer_data = build_token_enforcer_tokenizer_data(self.processor.tokenizer)
             self.model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
                 str(path),
                 local_files_only=True,

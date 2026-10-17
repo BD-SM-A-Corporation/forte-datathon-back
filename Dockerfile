@@ -18,6 +18,15 @@ COPY app ./app
 ARG INSTALL_MODEL=true
 RUN if [ "$INSTALL_MODEL" = "true" ]; then pip install --no-cache-dir '.[model,quantization]'; \
     else pip install --no-cache-dir .; fi
+# Triton builds its CUDA launcher during inference, including eager PyTorch ops.
+# Keep the compiler and libc headers available to the unprivileged runtime user.
+ARG DEBIAN_MIRROR=https://deb.debian.org
+RUN if [ "$INSTALL_MODEL" = "true" ]; then \
+      sed -i "s|http://deb.debian.org|${DEBIAN_MIRROR}|g" /etc/apt/sources.list.d/debian.sources \
+      && apt-get -o Acquire::https::Timeout=30 -o Acquire::Retries=3 update \
+      && apt-get -o Acquire::https::Timeout=30 -o Acquire::Retries=3 \
+         install -y --no-install-recommends build-essential \
+      && rm -rf /var/lib/apt/lists/*; fi
 COPY rules ./rules
 RUN useradd --uid 10001 --create-home engine && mkdir -p /app/storage/uploads /models \
     && chown -R engine:engine /app/storage /models

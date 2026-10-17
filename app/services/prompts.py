@@ -1,3 +1,5 @@
+import json
+
 from app.schemas.analysis import Observations
 
 SYSTEM_PROMPT = """You describe visible actions in CCTV frames, not violations.
@@ -62,13 +64,36 @@ inside each event. Confidence is a self-reported assessment, NOT a probability.
 """
 
 
-def observation_prompt(timestamps: list[float], retry: bool = False) -> str:
+def observation_schema(timestamps: list[float]) -> dict:
+    """Constrain every timestamp to an actual frame in this inference window."""
+    if not timestamps:
+        raise ValueError("Observation schema requires sampled frames")
+    schema = Observations.model_json_schema()
+    properties = schema["$defs"]["Observation"]["properties"]
+    timestamp = {"type": "number", "enum": list(dict.fromkeys(timestamps))}
+    for name in ("start_sec", "end_sec"):
+        properties[name].update(timestamp)
+    properties["evidence_timestamps"]["items"].update(timestamp)
+    facts = properties["facts"]
+    fact_values = next(iter(facts["patternProperties"].values()))
+    fact_values["items"].update(timestamp)
+    # The decoder supports additionalProperties, but not patternProperties.
+    # Keep the original key pattern and validate fact names with Pydantic too.
+    facts["additionalProperties"] = fact_values
+    return schema
+
+
+def observation_prompt(
+    timestamps: list[float], retry: bool = False, *, include_system: bool = True
+) -> str:
     return (
-        SYSTEM_PROMPT
-        + "\nSupplied timestamps: "
-        + str(timestamps)
+        (SYSTEM_PROMPT + "\n" if include_system else "")
+        + "Supplied timestamps: "
+        + json.dumps(timestamps)
+        + '\nReturn observations only for visible actions in the following frames. '
+        + 'If there are no visible actions, return {"events": []}.'
         + "\nJSON schema: "
-        + str(Observations.model_json_schema())
+        + json.dumps(observation_schema(timestamps))
         + (
             "\nPrevious response failed validation. Return complete valid JSON; check every field."
             if retry

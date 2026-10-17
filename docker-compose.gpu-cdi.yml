@@ -1,0 +1,9 @@
+# Use with docker-compose.yml on hosts with NVIDIA CDI configured (e.g. NixOS).
+# This is an alternative to docker-compose.gpu.yml; do not combine both overrides.
+services:
+  worker:
+    environment:
+      MODEL_DEVICE: cuda
+      MODEL_QUANTIZATION: ${MODEL_QUANTIZATION:-4bit}
+    devices:
+      - nvidia.com/gpu=0

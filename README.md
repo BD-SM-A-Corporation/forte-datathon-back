@@ -312,6 +312,14 @@ extensible descriptive snake_case labels, not a fixed legal taxonomy. Missing
 fields, invalid confidence, truncation, and invented timestamps trigger a bounded
 retry; persistent failure fails the job, preventing false all-clear results.
 
+The local Qwen adapter also constrains decoding with `lm-format-enforcer`: its
+per-window JSON schema permits only supplied timestamps for event boundaries,
+evidence, and facts. The tokenizer vocabulary index is cached with the model.
+Post-generation validation still checks event ordering, evidence bounds, and all
+other observation requirements. Validation failures report a category
+(`invalid_json`, `schema_mismatch`, or `ungrounded_timestamp`); worker logs include
+the attempt and window bounds without recording the generated scene text.
+
 Consolidation requires matching action type and object set, overlapping/nearby
 times, and description similarity ≥0.8. It keeps an existing description verbatim.
 This transparent heuristic can still split paraphrases or merge similar repeated
@@ -420,6 +428,37 @@ model/rule directories, environment values, and GPU reservation for local Qwen.
 For DMR use the DMR override and a reachable prepared runner. Route the API
 through your deployment proxy, which should also enforce the upload body limit.
 For local Qwen, do not scale multiple workers onto the same GPU.
+
+### NVIDIA on NixOS (CDI)
+
+`MODEL_DEVICE=cuda` selects CUDA in PyTorch; it does not expose the host GPU to
+Docker. If the host's `nvidia-smi` works but the worker reports
+`CUDA requested but no CUDA device is available`, check GPU access inside the worker.
+
+For NixOS, enable the toolkit in your system configuration and apply it with your
+usual `nixos-rebuild switch` command:
+
+```nix
+hardware.nvidia-container-toolkit.enable = true;
+```
+
+Check `systemctl status nvidia-container-toolkit-cdi-generator.service` and confirm
+that `/var/run/cdi/nvidia-container-toolkit.json` exists. See the
+[NixOS CUDA container documentation](https://github.com/NixOS/nixpkgs/blob/master/doc/languages-frameworks/cuda.section.md#running-docker-or-podman-containers-with-cuda-support).
+Use the CDI override instead of the NVIDIA runtime override above; do not combine
+the two. On an 8 GB GPU, set `MODEL_QUANTIZATION=4bit` in `.env` (an explicit `none`
+overrides the default). From this directory, recreate the existing worker:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.gpu-cdi.yml up -d --no-deps worker
+docker compose -f docker-compose.yml -f docker-compose.gpu-cdi.yml exec worker \
+  python -c 'import torch; print("CUDA:", torch.cuda.is_available()); print(torch.cuda.get_device_name(0))'
+```
+
+The check should print `CUDA: True` and the GPU name. For an initial deployment,
+omit `--no-deps` and add `--build` so Redis, model initialization, and image building
+run normally. Continue using the CDI override on subsequent Compose updates.
+Upload the video again after fixing access; failed jobs are not retried automatically.
 
 ## GPU requirements and limitations
 

@@ -1,5 +1,6 @@
 """Adapter contract tests with fake tensors; these do not validate actual Qwen inference."""
 
+import json
 import sys
 import time
 from contextlib import nullcontext
@@ -10,6 +11,7 @@ import numpy as np
 
 from app.services.inference import QwenObserver
 from app.services.model_loader import get_model
+from app.services.prompts import SYSTEM_PROMPT
 from app.services.video import Frame
 
 
@@ -30,8 +32,14 @@ def test_timestamped_processor_contract(monkeypatch, settings):
     processor.return_value = Batch()
     processor.batch_decode.return_value = ['{"events": []}']
     model = SimpleNamespace(device="cpu", generate=Mock(return_value=np.zeros((1, 7))))
+    tokenizer_data = object()
+    prefix = Mock()
+    constraint_builder = Mock(return_value=prefix)
+    monkeypatch.setattr(inference, "build_prefix_constraint", constraint_builder)
     monkeypatch.setattr(
-        inference, "get_model", lambda _: SimpleNamespace(processor=processor, model=model)
+        inference, "get_model", lambda _: SimpleNamespace(
+            processor=processor, model=model, tokenizer_data=tokenizer_data
+        )
     )
     monkeypatch.setitem(sys.modules, "torch", SimpleNamespace(inference_mode=nullcontext))
     monkeypatch.setitem(
@@ -44,11 +52,19 @@ def test_timestamped_processor_contract(monkeypatch, settings):
         Frame(2.75, np.zeros((56, 56, 3), np.uint8)),
     ]
     assert QwenObserver(settings).observe(frames, time.monotonic() + 10) == []
-    content = processor.apply_chat_template.call_args.args[0][0]["content"]
+    messages = processor.apply_chat_template.call_args.args[0]
+    assert messages[0] == {"role": "system", "content": SYSTEM_PROMPT}
+    assert messages[1]["role"] == "user"
+    content = messages[1]["content"]
+    assert SYSTEM_PROMPT not in content[0]["text"]
+    schema = json.loads(content[0]["text"].split("JSON schema: ", 1)[1])
+    assert "events" in schema["required"]
     assert "1.250000000" in content[1]["text"]
     assert "2.750000000" in content[3]["text"]
     assert len(processor.call_args.kwargs["images"]) == 2
     assert model.generate.call_args.kwargs["do_sample"] is False
+    assert model.generate.call_args.kwargs["prefix_allowed_tokens_fn"] is prefix
+    constraint_builder.assert_called_once_with(tokenizer_data, [1.25, 2.75])
     assert processor.batch_decode.call_args.args[0].shape == (1, 3)
 
 

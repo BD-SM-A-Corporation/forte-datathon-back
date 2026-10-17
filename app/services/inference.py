@@ -14,7 +14,7 @@ from app.core.config import Settings
 from app.core.errors import BudgetExceeded, InferenceError
 from app.schemas.analysis import Observation, Observations
 from app.services.model_loader import get_model
-from app.services.prompts import observation_prompt
+from app.services.prompts import SYSTEM_PROMPT, observation_prompt, observation_schema
 from app.services.video import Frame
 
 logger = logging.getLogger(__name__)
@@ -22,6 +22,35 @@ logger = logging.getLogger(__name__)
 
 class Observer(Protocol):
     def observe(self, frames: list[Frame], deadline: float) -> list[Observation]: ...
+
+
+class TimestampGroundingError(ValueError):
+    """An otherwise valid event references a frame that was not supplied."""
+
+
+def validation_diagnostics(exc: Exception) -> dict:
+    """Report structure errors without copying model text or arbitrary JSON keys."""
+    if isinstance(exc, json.JSONDecodeError):
+        return {"reason": "invalid_json", "position": exc.pos}
+    if isinstance(exc, ValidationError):
+        fields = {"events", *Observation.model_fields}
+        errors = exc.errors(include_input=False, include_context=False, include_url=False)
+        return {
+            "reason": "schema_mismatch",
+            "errors": [
+                {
+                    "type": error["type"],
+                    "loc": [
+                        item if isinstance(item, int) or item in fields else "<field>"
+                        for item in error["loc"]
+                    ],
+                }
+                for error in errors[:8]
+            ],
+        }
+    if isinstance(exc, TimestampGroundingError):
+        return {"reason": "ungrounded_timestamp"}
+    return {"reason": "invalid_output"}
 
 
 def parse_observations(raw: str, frames: list[Frame]) -> list[Observation]:
@@ -40,7 +69,7 @@ def parse_observations(raw: str, frames: list[Frame]) -> list[Observation]:
             *(t for times in event.facts.values() for t in times),
         ]:
             if not any(abs(timestamp - t) <= 0.001 for t in timestamps):
-                raise ValueError("Timestamp not grounded in supplied frames")
+                raise TimestampGroundingError("Timestamp not grounded in supplied frames")
         # Normalize sub-millisecond model rounding to the actual decoded PTS.
         event.start_sec = min(timestamps, key=lambda t: abs(t - event.start_sec))
         event.end_sec = min(timestamps, key=lambda t: abs(t - event.end_sec))
@@ -79,16 +108,39 @@ class ValidatedObserver(ABC):
             try:
                 return parse_observations(raw, frames)
             except (ValueError, ValidationError, TypeError) as exc:
-                logger.warning("invalid_model_output", extra={"metrics": {"attempt": attempt + 1}})
+                diagnostic = validation_diagnostics(exc)
+                logger.warning(
+                    "invalid_model_output",
+                    extra={"metrics": {
+                        "attempt": attempt + 1,
+                        "frame_count": len(frames),
+                        "window_start_sec": frames[0].timestamp_sec,
+                        "window_end_sec": frames[-1].timestamp_sec,
+                        "output_chars": len(raw),
+                        **diagnostic,
+                    }},
+                )
                 if attempt == self.settings.generation_retries:
                     raise InferenceError(
-                        "Model output failed validation; regulatory verdict unavailable"
+                        f"Model output failed validation ({diagnostic['reason']}); "
+                        "regulatory verdict unavailable"
                     ) from exc
         raise AssertionError("unreachable")
 
     @abstractmethod
     def _generate(self, frames: list[Frame], retry: bool, deadline: float) -> str:
         raise NotImplementedError
+
+
+def build_prefix_constraint(tokenizer_data, timestamps: list[float]):
+    from lmformatenforcer import JsonSchemaParser
+    from lmformatenforcer.integrations.transformers import (
+        build_transformers_prefix_allowed_tokens_fn,
+    )
+
+    return build_transformers_prefix_allowed_tokens_fn(
+        tokenizer_data, JsonSchemaParser(observation_schema(timestamps))
+    )
 
 
 class QwenObserver(ValidatedObserver):
@@ -107,7 +159,12 @@ class QwenObserver(ValidatedObserver):
 
         images = [Image.fromarray(cv2.cvtColor(f.image, cv2.COLOR_BGR2RGB)) for f in frames]
         content = [
-            {"type": "text", "text": observation_prompt([f.timestamp_sec for f in frames], retry)}
+            {
+                "type": "text",
+                "text": observation_prompt(
+                    [f.timestamp_sec for f in frames], retry, include_system=False
+                ),
+            }
         ]
         for frame, image in zip(frames, images):
             content += [
@@ -116,7 +173,10 @@ class QwenObserver(ValidatedObserver):
             ]
         # Native Qwen multi-image chat pathway; avoids assuming uniform video FPS for VFR inputs.
         text = service.processor.apply_chat_template(
-            [{"role": "user", "content": content}],
+            [
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": content},
+            ],
             tokenize=False,
             add_generation_prompt=True,
         )
@@ -128,6 +188,9 @@ class QwenObserver(ValidatedObserver):
                 **inputs,
                 do_sample=False,
                 max_new_tokens=self.settings.max_new_tokens,
+                prefix_allowed_tokens_fn=build_prefix_constraint(
+                    service.tokenizer_data, [f.timestamp_sec for f in frames]
+                ),
                 stopping_criteria=StoppingCriteriaList([Deadline()]),
             )
         return service.processor.batch_decode(

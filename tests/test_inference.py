@@ -6,7 +6,7 @@ import pytest
 from pydantic import ValidationError
 
 from app.core.errors import ConfigurationError, InferenceError
-from app.services.inference import QwenObserver, parse_observations
+from app.services.inference import QwenObserver, parse_observations, validation_diagnostics
 from app.services.model_loader import LocalQwen
 from app.services.video import Frame
 
@@ -85,3 +85,28 @@ def test_wrong_model(settings, tmp_path):
 
 def test_fenced_output(frames):
     assert parse_observations('```json\n{"events": []}\n```', frames) == []
+
+
+def test_diagnostics_redact_model_text_and_unknown_fields(frames):
+    private = "private scene text"
+    with pytest.raises(ValidationError) as error:
+        parse_observations(json.dumps({"events": [], private: private}), frames)
+    diagnostic = validation_diagnostics(error.value)
+    assert diagnostic["reason"] == "schema_mismatch"
+    assert diagnostic["errors"] == [{"type": "extra_forbidden", "loc": ["<field>"]}]
+    assert private not in json.dumps(diagnostic)
+
+
+def test_timestamp_failure_has_specific_diagnostics(event, frames):
+    event.evidence_timestamps = [1.5]
+    with pytest.raises(ValueError) as error:
+        parse_observations(json.dumps({"events": [event.model_dump()]}), frames)
+    assert validation_diagnostics(error.value) == {"reason": "ungrounded_timestamp"}
+
+
+def test_invalid_json_reason_reaches_log_and_client(frames, settings, caplog):
+    observer = QwenObserver(settings, lambda *args: '{"events": [')
+    with pytest.raises(InferenceError, match="invalid_json"):
+        observer.observe(frames, time.monotonic() + 30)
+    assert caplog.records[-1].metrics["reason"] == "invalid_json"
+    assert caplog.records[-1].metrics["attempt"] == 2
