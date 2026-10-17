@@ -1,0 +1,2 @@
+# Runtime with local Qwen. For CPU-only tests use: pip install -e '.[test]'
+.[model]

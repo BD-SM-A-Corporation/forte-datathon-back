@@ -1,1 +1,96 @@
-# Regulatory rules matching
+import json
+from datetime import date
+from pathlib import Path
+from typing import Literal
+from urllib.parse import urlparse
+
+from pydantic import Field, model_validator
+
+from app.core.errors import ConfigurationError
+from app.schemas.analysis import EventType, Observation, StrictModel
+
+
+class Source(StrictModel):
+    document: str = Field(min_length=1)
+    section: str = Field(min_length=1)
+    url: str
+    jurisdiction: Literal["KZ"]
+    verified_on: date
+    verified_by: str = Field(min_length=1)
+    excerpt: str = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def official(self) -> "Source":
+        url = urlparse(self.url)
+        host = url.hostname or ""
+        if url.scheme != "https" or not any(
+            host == domain or host.endswith("." + domain)
+            for domain in ("adilet.zan.kz", "gov.kz", "nationalbank.kz")
+        ):
+            raise ValueError("Source must be an official Kazakhstan public regulatory URL")
+        if self.verified_on > date.today():
+            raise ValueError("Verification cannot be dated in the future")
+        return self
+
+
+class Conditions(StrictModel):
+    objects_all: list[str] = Field(default_factory=list)
+    min_duration_sec: float = Field(0, ge=0)
+    min_confidence: float = Field(0, ge=0, le=1)
+
+
+class Rule(StrictModel):
+    id: str = Field(min_length=1)
+    name: str = Field(min_length=1)
+    source: Source
+    observable_event_types: list[EventType] = Field(min_length=1)
+    conditions: Conditions
+    applicability: str = Field(min_length=1)
+    explanation_template: str = Field(min_length=1)
+
+
+class Catalogue(StrictModel):
+    rules: list[Rule]
+
+    @model_validator(mode="after")
+    def unique(self) -> "Catalogue":
+        if len({r.id for r in self.rules}) != len(self.rules):
+            raise ValueError("Duplicate rule IDs")
+        return self
+
+
+class RuleEngine:
+    def __init__(self, catalogue: Catalogue):
+        self.catalogue = catalogue
+
+    @classmethod
+    def load(cls, path: Path) -> "RuleEngine":
+        try:
+            return cls(Catalogue.model_validate_json(path.read_text()))
+        except (OSError, ValueError) as exc:
+            raise ConfigurationError("Regulation catalogue missing or invalid") from exc
+
+    @property
+    def configured(self) -> bool:
+        return bool(self.catalogue.rules)
+
+    def require_configured(self) -> None:
+        if not self.configured:
+            raise ConfigurationError(
+                "Verified regulations are not configured; regulatory verdict unavailable"
+            )
+
+    def match(self, event: Observation) -> list[Rule]:
+        self.require_configured()
+        return [
+            rule
+            for rule in self.catalogue.rules
+            if event.event_type in rule.observable_event_types
+            and set(rule.conditions.objects_all) <= set(event.objects)
+            and event.end_sec - event.start_sec >= rule.conditions.min_duration_sec
+            and event.confidence >= rule.conditions.min_confidence
+        ]
+
+
+def write_schema(path: Path) -> None:
+    path.write_text(json.dumps(Catalogue.model_json_schema(), indent=2) + "\n")

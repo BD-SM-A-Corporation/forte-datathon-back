@@ -1,0 +1,12 @@
+services:
+  worker:
+    environment:
+      MODEL_DEVICE: cuda
+      MODEL_QUANTIZATION: ${MODEL_QUANTIZATION:-4bit}
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]

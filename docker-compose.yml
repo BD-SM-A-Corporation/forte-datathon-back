@@ -1,26 +1,69 @@
+x-backend: &backend
+  build:
+    context: .
+    args:
+      INSTALL_MODEL: ${INSTALL_MODEL:-true}
+  image: forte-analysis:local
+  restart: unless-stopped
+  env_file: ${ENV_FILE:-.env}
+  environment:
+    REDIS_URL: redis://redis:6379/0
+    UPLOAD_DIR: /app/storage/uploads
+    RULES_PATH: /app/rules/regulations.json
+    QWEN_MODEL_PATH: /models/Qwen2.5-VL-3B-Instruct
+    HF_HUB_OFFLINE: "1"
+    TRANSFORMERS_OFFLINE: "1"
+  volumes:
+    - uploads:/app/storage
+    - ./weights:/models:ro
+    - ./rules:/app/rules:ro
+  depends_on:
+    redis:
+      condition: service_healthy
+
 services:
-  backend:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    container_name: forte_backend
-    restart: unless-stopped
+  api:
+    <<: *backend
     ports:
       - "8000:8000"
-    environment:
-      - ENVIRONMENT=production
-      - API_KEY=${API_KEY:-forte_hackathon_jury_secret_key}
-      - DATABASE_URL=sqlite+aiosqlite:///storage/db.sqlite3
-      - UPLOAD_DIR=storage/uploads
-      - FRAMES_DIR=storage/frames
-      - RULES_PATH=rules/rules.yaml
-      - DEVICE=cpu
-    volumes:
-      - ./storage:/app/storage
-      - ./weights:/app/weights
-      - ./rules:/app/rules
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
       interval: 30s
       timeout: 5s
       retries: 3
+  worker:
+    <<: *backend
+    command: [python, -m, app.workers.analysis]
+    stop_grace_period: 310s
+    healthcheck:
+      test: [CMD, python, -m, app.workers.health]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+  redis:
+    image: redis:7.4-alpine
+    ports:
+      - "127.0.0.1:6379:6379"
+    command: [redis-server, --appendonly, "yes"]
+    restart: unless-stopped
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: [CMD, redis-cli, ping]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+  # This repository contains no frontend. Supply your existing Next.js image to opt in.
+  frontend:
+    profiles: [frontend]
+    image: ${FRONTEND_IMAGE:-forte-frontend:local}
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    depends_on:
+      api:
+        condition: service_healthy
+
+volumes:
+  uploads:
+  redis-data:

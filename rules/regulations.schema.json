@@ -1,0 +1,147 @@
+{
+  "$defs": {
+    "Conditions": {
+      "additionalProperties": false,
+      "properties": {
+        "objects_all": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Objects All",
+          "type": "array"
+        },
+        "min_duration_sec": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Min Duration Sec",
+          "type": "number"
+        },
+        "min_confidence": {
+          "default": 0,
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Min Confidence",
+          "type": "number"
+        }
+      },
+      "title": "Conditions",
+      "type": "object"
+    },
+    "Rule": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "name": {
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "source": {
+          "$ref": "#/$defs/Source"
+        },
+        "observable_event_types": {
+          "items": {
+            "pattern": "^[a-z][a-z0-9_]{0,63}$",
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Observable Event Types",
+          "type": "array"
+        },
+        "conditions": {
+          "$ref": "#/$defs/Conditions"
+        },
+        "applicability": {
+          "minLength": 1,
+          "title": "Applicability",
+          "type": "string"
+        },
+        "explanation_template": {
+          "minLength": 1,
+          "title": "Explanation Template",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "source",
+        "observable_event_types",
+        "conditions",
+        "applicability",
+        "explanation_template"
+      ],
+      "title": "Rule",
+      "type": "object"
+    },
+    "Source": {
+      "additionalProperties": false,
+      "properties": {
+        "document": {
+          "minLength": 1,
+          "title": "Document",
+          "type": "string"
+        },
+        "section": {
+          "minLength": 1,
+          "title": "Section",
+          "type": "string"
+        },
+        "url": {
+          "title": "Url",
+          "type": "string"
+        },
+        "jurisdiction": {
+          "const": "KZ",
+          "title": "Jurisdiction",
+          "type": "string"
+        },
+        "verified_on": {
+          "format": "date",
+          "title": "Verified On",
+          "type": "string"
+        },
+        "verified_by": {
+          "minLength": 1,
+          "title": "Verified By",
+          "type": "string"
+        },
+        "excerpt": {
+          "minLength": 1,
+          "title": "Excerpt",
+          "type": "string"
+        }
+      },
+      "required": [
+        "document",
+        "section",
+        "url",
+        "jurisdiction",
+        "verified_on",
+        "verified_by",
+        "excerpt"
+      ],
+      "title": "Source",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "rules": {
+      "items": {
+        "$ref": "#/$defs/Rule"
+      },
+      "title": "Rules",
+      "type": "array"
+    }
+  },
+  "required": [
+    "rules"
+  ],
+  "title": "Catalogue",
+  "type": "object"
+}

@@ -41,3 +41,9 @@ weights/*.onnx
 .idea/
 .vscode/
 *.swp
+weights/**
+!weights/.gitkeep
+.pytest_cache/
+.ruff_cache/
+benchmark*.json
+.venv-test/

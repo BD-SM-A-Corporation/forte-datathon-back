@@ -1,50 +1,322 @@
-# Forte Datathon — Backend API & ML Video Analytics
+# Forte Datathon — offline video analysis backend
 
-Микросервис FastAPI и ML-пайплайн для видеоаналитики кассовой зоны в соответствии с нормативными актами НБРК.
+A zero-shot CCTV observation engine using **Qwen/Qwen2.5-VL-3B-Instruct**, OpenCV,
+FFmpeg, FastAPI, and Redis/RQ. It describes visible actions, then matches those
+observations against a locally maintained catalogue of verified Kazakhstan rules.
+It does not identify people or infer invisible transactions, intent, or authorization.
 
-## Архитектура
-- **FastAPI + Uvicorn**: асинхронный сервер для приёма видеофайлов и выдачи результатов
-- **Очередь/Воркер**: асинхронный фоновый пайплайн обработки с хранением состояния в SQLite (`storage/db.sqlite3`)
-- **ML-пайплайн**:
-  - `video.py`: декодирование через ffmpeg (~5 FPS)
-  - `detector.py`: YOLO-pose (скелет без распознавания лиц) + детекция объектов кассовой зоны (деньги, ящик, сейф)
-  - `tracker.py`: трекинг кассира
-  - `features.py`: относительные пространственные признаки (рука–деньги, кассир–кассовый узел)
-  - `classifier.py`: state-machine классификатор нарушений по правилам и временным интервалам
-  - `evidence.py`: кадры-доказательства с разметкой в base64 и JPEG
-  - `rules_engine.py`: нормативная база из `rules/rules.yaml` со ссылками на adilet.zan.kz
+This repository already used a root-level `app/` layout, so that layout is retained
+instead of adding a second `backend/` directory. No frontend source exists here.
+The obsolete API imported nonexistent modules; it has been replaced, along with
+its unused SQLite models. No migration is required for the new Redis job store.
 
-## Запуск в среде Nix (`shell.nix`)
+## Architecture
 
-В корневой директории проекта активируйте nix-shell:
-```bash
-nix-shell
+```text
+Next.js → POST /api/v1/analyze → shared upload storage + Redis/RQ
+                                       ↓
+                         one persistent worker per GPU
+                                       ↓
+FFprobe PTS → OpenCV decoding → baseline samples + motion candidates
+                                       ↓
+              timestamped Qwen multi-image windows (local weights)
+                                       ↓
+             optional denser windows → validated observations
+                                       ↓
+             conservative consolidation → verified local rules
+                                       ↓
+          original-frame JPEG evidence → Redis result + audit details
+                                       ↓
+                         GET /api/v1/jobs/{job_id}
 ```
 
-В директории `backend`:
+All inference is local. Dependency and checkpoint downloads are separate setup
+operations. Neither video processing nor rule matching makes network requests.
+Redis is a local deployment service, not an external inference service.
+
+**The supplied rule catalogue is deliberately empty.** The previous YAML included
+unsubstantiated `verified: true` assertions; those are not used. A readable video
+submitted without configured verified rules gets a failed job with
+`Verified regulations are not configured; regulatory verdict unavailable`.
+An empty catalogue never yields `no_violation`.
+
+## Installation and local development
+
+Requires Python 3.11–3.13, FFmpeg/ffprobe on PATH, and Redis 7.
+
 ```bash
-# Создание venv и установка зависимостей через uv
-uv venv
+python3.11 -m venv .venv
 source .venv/bin/activate
-uv pip install -e .
-
-# Запуск сервера
-uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+pip install -e '.[test]'
+cp .env.example .env
+# Set API_KEY to a freshly generated secret, e.g. python -c 'import secrets; print(secrets.token_hex(32))'
+# Configure verified rules before expecting successful regulatory verdicts.
+docker compose up -d redis
+uvicorn app.main:app --host 0.0.0.0 --port 8000
+# In another terminal, using the same environment and working directory:
+pip install -e '.[model]'
+python -m app.workers.analysis
 ```
 
-## Запуск в Docker Compose (для сервера / VM)
+The API requires a nonempty `API_KEY` at startup. `/health` checks Redis and reports
+whether rules are configured; it does not promise GPU/model readiness. Swagger is
+at `/docs`. Queue startup is independent of model initialization. The model loads
+lazily on the first configured, valid job. One `SimpleWorker` process handles jobs
+sequentially and keeps the model resident; the default forking RQ worker would
+reload weights for every job and must not be substituted.
+
+## Download the checkpoint in advance
+
+On an internet-connected setup machine:
 
 ```bash
-docker compose up -d --build
+pip install 'huggingface_hub[cli]'
+HF_HUB_OFFLINE=0 TRANSFORMERS_OFFLINE=0 hf download \
+  Qwen/Qwen2.5-VL-3B-Instruct --local-dir weights/Qwen2.5-VL-3B-Instruct
 ```
 
-Сервер будет доступен на `http://localhost:8000`.
-- Интерактивная документация Swagger: `http://localhost:8000/docs`
-- Проверка работоспособности: `http://localhost:8000/health`
+Copy the entire directory, including processor/tokenizer files and all safetensor
+shards, to the offline machine. Set `QWEN_MODEL_PATH` to that local directory.
+For reproducible evaluation use `hf download --revision <commit-sha>` and record
+that SHA with the benchmark. Model loading uses `local_files_only=True`, disables
+remote code, and enables `HF_HUB_OFFLINE` and `TRANSFORMERS_OFFLINE`. A missing or
+incompatible checkpoint fails clearly; there is no alternate-model fallback.
 
-## Основные API-эндпоинты
+The adapter follows the official [Qwen multi-image interface](https://huggingface.co/Qwen/Qwen2.5-VL-3B-Instruct#quickstart):
+interleaved timestamp text and images, Qwen chat template, compatible processor,
+and generated-token-only decoding. Image sequences are intentional: each decoded
+presentation timestamp remains explicit even for variable-frame-rate recordings.
+The native video-tensor path is not enabled because a single FPS would not preserve
+arbitrary VFR spacing. Real-checkpoint compatibility must be confirmed with the
+smoke test below before deployment; no model execution is implied by mocked tests.
 
-- `POST /api/v1/analyze`: Загрузка видеофайла (без ограничений Vercel, напрямую на бэкенд)
-- `GET /api/v1/jobs/{job_id}`: Проверка статуса анализа, вердикт (`violation` / `no_violation`), список нарушений и кадры-доказательства
-- `GET /api/v1/rules`: Список нормативных правил НБРК
-- `GET /api/v1/frames/{job_id}/{violation_id}`: Получение кадра-доказательства
+## Configuration
+
+All settings use environment variables or `.env`; `.env.example` lists defaults.
+
+| Variables | Meaning |
+| --- | --- |
+| `API_KEY`, `CORS_ORIGINS` | Required secret; JSON list of allowed browser origins |
+| `REDIS_URL`, `QUEUE_NAME` | Queue and result storage |
+| `UPLOAD_DIR`, `RULES_PATH` | Shared recordings and validated JSON catalogue |
+| `MAX_UPLOAD_MB` | File limit, default 512 MiB; multipart body has 64 KiB overhead allowance |
+| `MAX_DURATION_SEC` | Maximum accepted video duration, default 150 seconds |
+| `MAX_VIDEO_PIXELS`, `MAX_DECODED_FRAMES` | Decode resource bounds, defaults 8,294,400 and 18,000 |
+| `BASE_SAMPLE_FPS`, `DETAILED_SAMPLE_FPS` | Whole-timeline baseline 1 FPS and refinement 3 FPS |
+| `WINDOW_DURATION_SEC`, `WINDOW_OVERLAP_SEC` | Baseline windows, defaults 5 and 1 seconds |
+| `MOTION_THRESHOLD` | Minimum changed-pixel fraction, default 0.04 |
+| `MOTION_PIXEL_THRESHOLD` | Minimum grayscale pixel difference, default 25/255 |
+| `MOTION_MERGE_GAP_SEC` | Merge nearby motion intervals, default 1 second |
+| `INFERENCE_MAX_SIDE`, `ROI` | Resize longest side to 448; optional normalized crop `[left,top,right,bottom]` |
+| `QWEN_MODEL_PATH`, `MODEL_DEVICE` | Existing local checkpoint; `cpu` or `cuda` |
+| `MODEL_QUANTIZATION` | `none`, `4bit`, or `8bit`; quantization requires CUDA in this implementation |
+| `MAX_NEW_TOKENS`, `MAX_FRAMES_PER_WINDOW` | Generation cap 512; input cap 12 |
+| `GENERATION_RETRIES` | Retry malformed JSON once by default, max 2 |
+| `MAX_REFINEMENT_WINDOWS` | Bound additional inspection, default 8 |
+| `PROCESSING_BUDGET_SEC` | Default 300-second worker timeout, also checked between stages and generated tokens |
+| `QUEUE_TTL_SEC`, `RESULT_TTL_SEC` | Queue expiry 3600 seconds; result/failure retention 86400 seconds |
+| `EVENT_MERGE_GAP_SEC` | Duplicate-event gap tolerance, default 0.2 seconds |
+
+Settings reject overlap larger than the window, invalid ROIs, and baseline rates
+that cannot fit the frame cap. Refinement windows shorten automatically to fit the
+configured detailed sampling rate without dropping baseline observations.
+
+## Video timing, motion, and evidence
+
+FFprobe decodes presentation timestamps for the first video stream. Times are
+normalized to its first decoded frame, not inferred by dividing a frame index by
+FPS. OpenCV decodes that stream in presentation order; frame counts are checked.
+Rotation metadata is intentionally not applied, so all ROI and evidence coordinates
+refer to original decoded pixel orientation. Audio is neither decoded nor analyzed.
+
+Sampling chooses the first decoded frame at or after each sampling target and
+reports its actual timestamp. Baseline samples cover the complete timeline at the
+configured rate; sparse sampling can still miss short actions. Sample thumbnails
+are cached temporarily on disk and only one inference window is loaded into RAM.
+Full-resolution frames are decoded one at a time. FFprobe frame metadata is small
+but retained in memory. Corrupt or unsupported recordings fail instead of producing
+a verdict from incomplete decoding.
+
+Motion is measured on blurred grayscale frames resized to 160 pixels wide. The
+score is the fraction of pixels whose difference exceeds the grayscale threshold,
+after 3×3 morphological opening. Adjacent intervals merge and retain the peak score.
+This is **not a probability of a violation**. Motion and initial event candidates
+request extra windows; `IntervalProvider` allows future local detectors to propose
+intervals in original-video seconds. Suspected events receive refinement priority.
+
+JSON validation requires all event boundaries and evidence times to correspond to
+supplied frames (up to 1 ms rounding, normalized back to exact PTS). Event types are
+extensible descriptive snake_case labels, not a fixed legal taxonomy. Missing
+fields, invalid confidence, truncation, and invented timestamps trigger a bounded
+retry; persistent failure fails the job, preventing false all-clear results.
+
+Consolidation requires matching action type and object set, overlapping/nearby
+times, and description similarity ≥0.8. It keeps an existing description verbatim.
+This transparent heuristic can still split paraphrases or merge similar repeated
+actions; review it against annotated videos. Distinct times/descriptions remain
+separate. Each event-rule match produces one potential violation. Multiple rules
+may apply to one event and remain separate, with separate rule IDs in audit details.
+
+Evidence is extracted once after matching, in a single decode pass across all
+selected timestamps. It contains 1–3 original full-resolution JPEG frames per
+matched event, with no ROI, overlay, generated content, or identity recognition.
+
+## Adding verified Kazakhstan regulations
+
+`rules/regulations.schema.json` defines the strict catalogue schema. The application
+validates it at API and worker startup. Missing/malformed files prevent startup;
+an empty valid catalogue allows startup but fails analysis verdicts explicitly.
+
+Before adding a production rule, a qualified reviewer must verify the currently
+applicable Kazakhstan act, exact section, quotation, applicability to this banking
+context, and whether the condition is actually observable in video. Do not turn
+object transfers, phones, or bags into violations by assumption.
+
+Each entry requires:
+
+- Stable `id`, `name`, `observable_event_types`, and `conditions`.
+- `source.document`, `section`, official HTTPS `url`, `jurisdiction: "KZ"`,
+  `verified_on`, `verified_by`, and a checked `excerpt`.
+- `applicability` documenting why a purely visual match is sufficient to flag a
+  **potential** violation in this deployment, and `explanation_template` as plain
+  explanatory text (no executable template interpolation).
+
+Supported conditions are `objects_all`, `min_duration_sec`, and `min_confidence`.
+Unknown fields are rejected rather than silently ignored. Confidence is the model's
+uncalibrated self-assessment. Deterministic matching cannot establish legal guilt.
+The official-domain allowlist and verification fields validate catalogue structure;
+they do **not** independently verify law or the truth of a reviewer's assertions.
+There is deliberately no production legal example masquerading as a verified rule.
+Unit-test rules are explicitly fictional fixtures and must never be deployed.
+
+Restart API and worker after editing the catalogue. Results retain a snapshot of
+matched rules and source references in `/jobs/{id}/details`. New descriptive event
+types and rule entries do not require model retraining. Rules requiring facts beyond
+the supported visible conditions must wait for an appropriate implementation.
+
+## API
+
+Every analysis, status, and detail request requires `X-API-Key`. Never expose the
+shared secret in a public Next.js client bundle; proxy requests from a server route.
+
+```bash
+curl -X POST http://localhost:8000/api/v1/analyze \
+  -H "X-API-Key: $API_KEY" -F 'file=@recording.mov'
+# {"job_id":"<uuid>"}
+curl http://localhost:8000/api/v1/jobs/<uuid> -H "X-API-Key: $API_KEY"
+curl http://localhost:8000/api/v1/jobs/<uuid>/details -H "X-API-Key: $API_KEY"
+```
+
+Upload streaming is size-limited; extension validation happens immediately and
+actual video validation occurs in the worker. Therefore corrupted `.mov` content
+receives a job ID and later a `failed` status. Processing never runs in the request.
+`processing` covers queued and running jobs. Completed responses preserve the jury
+contract, with `type`, `timecode_sec`, `description`, and `evidence_frames`:
+
+```json
+{"job_id":"<uuid>","status":"done","verdict":"no_violation","violations":[]}
+```
+
+`no_violation` means no match within the configured rule catalogue and sampled
+observations; it does not certify compliance with every Kazakhstan regulation.
+Failures include a safe `error` and omit verdict/violations. Unknown or expired jobs
+return 404; wrong/missing keys return 401. Redis outages return 503. Audit details
+contain observations, matched source snapshots, motion intervals, and timing metrics.
+
+Uploads are deleted after completed or failed jobs. Hard-killed workers or expired
+queued jobs may leave files; periodically run `python -m scripts.cleanup` against
+shared storage. It deletes old files only when no active job owns them. Redis has
+bounded result retention. Keep Redis private: RQ is a trusted internal queue.
+
+## Docker Compose and Coolify
+
+```bash
+cp .env.example .env
+# Set API_KEY, stage weights, and supply verified regulations.
+docker compose up -d --build
+# With NVIDIA Container Toolkit and a suitable host NVIDIA driver:
+docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d --build
+# Optional: use your existing frontend image, no frontend is rebuilt here.
+FRONTEND_IMAGE=your-nextjs-image:tag docker compose --profile frontend up -d
+```
+
+The GPU override reserves one NVIDIA GPU for the worker. Set
+`MODEL_QUANTIZATION=4bit` in `.env` and install the quantization extra for 4-bit mode.
+API and worker share one image and upload volume; models and rules are read-only
+bind mounts. Redis persists to its own volume and binds its host port only to loopback. All services
+restart automatically. Worker health allows an entire processing budget between
+heartbeats because SimpleWorker does not heartbeat during a job.
+
+For CPU-only infrastructure development, build with `INSTALL_MODEL=false`; this
+supports API/queue/tests, but configured inference jobs require the model extra.
+There is no runtime mock switch on the production API. Tests explicitly inject a
+mock observer. On Coolify, use the same Compose services, shared volume, mounted
+model/rule directories, environment values, and GPU reservation. Route the API
+through your deployment proxy, which should also enforce the upload body limit.
+Do not scale multiple workers onto the same GPU.
+
+## GPU requirements and limitations
+
+The 3B model can run with CUDA FP16/BF16 or bitsandbytes 4/8-bit quantization.
+Choose an NVIDIA GPU with enough VRAM for weights **and** multi-image activations;
+8–12 GB is a starting planning range for quantized, reduced-resolution experiments,
+not a measured guarantee. CPU float32 is available for development but is likely
+impractical for the five-minute target. Input frame count/resolution strongly affect
+memory and latency. Quantization support depends on the installed CUDA/PyTorch/
+bitsandbytes combination and must be tested on the deployment host.
+
+This MVP uses a cooperative per-stage/token deadline plus RQ's Unix signal timeout.
+A blocking native GPU operation can delay signal handling; the timeout is not a
+hard real-time guarantee. Cold model loading counts against the job budget. For
+long-running deployments, benchmark both cold and warm runs.
+
+## Tests and performance measurement
+
+```bash
+pip install -e '.[test]'
+pytest -q
+ruff check app tests scripts
+# Optional real local-checkpoint smoke test (no downloads):
+RUN_LOCAL_MODEL_TEST=1 pytest -q tests/test_model_integration.py
+# Real model benchmark after configuring verified rules and staging weights:
+python -m scripts.benchmark recording.mov --repeat 3 > benchmark.json
+# Mock timing, requires an explicitly supplied test catalogue; no model accuracy claim:
+RULES_PATH=/path/to/your/test-catalogue.json python -m scripts.benchmark recording.mov --mock
+```
+
+Tests generate real MOVs locally, including VFR input, and validate OpenCV/FFmpeg
+processing. Inference tests mock generated text; end-to-end tests use a deterministic
+observer and fakeredis with a real RQ SimpleWorker. They require no model weights,
+CUDA, or internet. The opt-in local-model smoke test exercises the actual processor,
+model generation, and output validation and skips by default.
+
+Benchmark all supplied 10–145 second recordings; retain checkpoint SHA, GPU/driver,
+Python/package versions, quantization, frame settings, cold/warm timing, errors,
+and peak VRAM (`nvidia-smi`). The tool reports per-run wall time and the 300-second
+comparison, excluding upload/network/queue wait. Measure submission-to-result time
+separately with the API under expected load. A serial worker can accumulate queue
+wait even when individual jobs meet the budget.
+
+**No real-model inference, violation-detection accuracy, or five-minute GPU result
+has been validated in this repository's CPU tests.** No dataset recordings, model
+weights, or verified regulations were supplied. Motion, zero-shot descriptions, and
+self-reported confidence can all produce false positives or omissions. Occlusion,
+small objects, frame sampling, lighting, and ROI crops limit observations. Human
+review and labeled evaluation are required before relying on alerts.
+
+## Validation recorded during implementation
+
+On 2026-10-17, Python 3.11.15: **61 tests passed, 1 skipped** in 4.29 seconds.
+The skipped test requires a real local Qwen checkpoint. The suite emitted one
+upstream Starlette warning about its legacy httpx TestClient transport. Ruff lint,
+format checks, `git diff --check`, and CPU/GPU Compose configuration validation
+passed. Docker images/services were not built or started for this validation.
+API tests needed execution outside the restricted sandbox because even an empty
+FastAPI TestClient stalled on local event-loop communication inside it.
+
+Two synthetic, static, 160×120 MOVs at 10 decoded FPS were also measured with
+`MockObserver` and a fictional test-only catalogue: a 10-second clip took 0.335 s
+(10 baseline samples, 3 windows), and a 145-second clip took 0.547 s (145 samples,
+36 windows). These measurements include preprocessing and pipeline orchestration,
+but no neural inference, matched-event evidence, uploads, or queue wait. They are
+not evidence that the real deployment meets the five-minute jury limit.
