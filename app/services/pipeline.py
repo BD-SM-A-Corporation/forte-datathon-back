@@ -163,6 +163,14 @@ class Pipeline:
                 {"observation": event.model_dump(), "rule": rule.model_dump(mode="json")}
                 for event, rule in matches
             ],
+            "context_matches": [
+                {"observation": event.model_dump(), "rule": rule.model_dump(mode="json")}
+                for event in events
+                for rule in self.rules.context(event)
+            ],
+            "regulatory_assessment": "potential_matches" if matches else "no_supported_match",
+            "review_required": bool(matches)
+            or any(self.rules.needs_review(event) for event in events),
             "motion_intervals": [asdict(i) for i in motion_intervals],
             "metrics": {
                 "processing_sec": elapsed,

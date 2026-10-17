@@ -34,11 +34,46 @@ All inference is local. Dependency and checkpoint downloads are separate setup
 operations. Neither video processing nor rule matching makes network requests.
 Redis is a local deployment service, not an external inference service.
 
-**The supplied rule catalogue is deliberately empty.** The previous YAML included
-unsubstantiated `verified: true` assertions; those are not used. A readable video
-submitted without configured verified rules gets a failed job with
-`Verified regulations are not configured; regulatory verdict unavailable`.
-An empty catalogue never yields `no_violation`.
+The default catalogue now contains conservative checks for paragraphs **20 and 22**
+and non-violation context for paragraph **32** of National Bank Resolution No. 231
+of 29 November 2019, [official act V1900019680](https://adilet.zan.kz/rus/docs/V1900019680).
+The paragraph text was retrieved from Adilet's public API; the retrieved excerpts,
+source URL, document ID, and content hash are recorded in
+`rules/sources/V1900019680.json`. This verifies the source text, not model accuracy
+or a legal conclusion about a recording. The earlier unrelated document URL is not used.
+An empty catalogue (or one containing only context entries) still fails explicitly.
+
+### What these rules can flag
+
+| Rule | Required visible context | Insufficient on its own |
+| --- | --- | --- |
+| P20 counting | Receipt of the same cash, initial counting visibly still in progress as the counterparty leaves, and continued counting with both areas visible | Client simply not visible, or a later recount after completed service |
+| P20 storage | Earlier receipt, its visible completion and a separate interaction, with the same earlier cash remaining on an open surface | Any cash on a desk during active handling |
+| P22 departure | Established counter operator and participant roles, actual operator departure, positive signs of interrupted cash service, participant remaining | Empty chair, waiting person, occlusion, or merely no evidence that service ended |
+| P32 packaging | Context for reviewing a banknote package handover | No visible counting; this never creates a violation by itself |
+
+Qwen returns positive `facts` with supporting supplied-frame timestamps and material
+`uncertainties`. Missing facts mean unknown. Every required fact must be supported
+within one analyzed window, with no material uncertainty and confidence at least
+0.8. This threshold is an engineering filter, not calibrated legal certainty. Cross-window
+consolidation never combines partial fact sets into a newly satisfied rule. Sparse
+frames cannot establish that counting never happened, so P32 is context-only.
+This conservative approach can miss events whose necessary context spans longer
+than a window; it does not invent unseen context to compensate.
+
+The jury response remains unchanged. `/api/v1/jobs/{id}/details` additionally returns
+`context_matches`, `regulatory_assessment`, and `review_required`. A `no_violation`
+response means no supported rule match, even when `review_required` is true; it is
+not proof of compliance. Review the details for uncertain or packaging-related cases.
+
+After pulling this update, rebuild both processes so they use the new prompt,
+schemas, and catalogue, then upload the video again (old failed jobs are not rerun):
+
+```bash
+docker compose up -d --build api worker
+# GPU deployment: use the same override as your original startup command.
+docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d --build api worker
+```
 
 ## Installation and local development
 
@@ -50,7 +85,7 @@ source .venv/bin/activate
 pip install -e '.[test]'
 cp .env.example .env
 # Set API_KEY to a freshly generated secret, e.g. python -c 'import secrets; print(secrets.token_hex(32))'
-# Configure verified rules before expecting successful regulatory verdicts.
+# Review the bundled rule scope; stage the local checkpoint before running inference.
 docker compose up -d redis
 uvicorn app.main:app --host 0.0.0.0 --port 8000
 # In another terminal, using the same environment and working directory:
@@ -181,13 +216,16 @@ Each entry requires:
   **potential** violation in this deployment, and `explanation_template` as plain
   explanatory text (no executable template interpolation).
 
-Supported conditions are `objects_all`, `min_duration_sec`, and `min_confidence`.
+Supported conditions are `objects_all`, `min_duration_sec`, `min_confidence`,
+`facts_all`, and `require_no_uncertainties`. `kind: context` entries never generate
+violations. The default `kind` is `potential_violation`.
 Unknown fields are rejected rather than silently ignored. Confidence is the model's
 uncalibrated self-assessment. Deterministic matching cannot establish legal guilt.
 The official-domain allowlist and verification fields validate catalogue structure;
 they do **not** independently verify law or the truth of a reviewer's assertions.
-There is deliberately no production legal example masquerading as a verified rule.
-Unit-test rules are explicitly fictional fixtures and must never be deployed.
+Bundled rules cite the checked official source; their visual matching logic is an
+engineering interpretation requiring human review. Unit-test rules are explicitly
+fictional fixtures and must never be deployed.
 
 Restart API and worker after editing the catalogue. Results retain a snapshot of
 matched rules and source references in `/jobs/{id}/details`. New descriptive event
@@ -298,15 +336,17 @@ separately with the API under expected load. A serial worker can accumulate queu
 wait even when individual jobs meet the budget.
 
 **No real-model inference, violation-detection accuracy, or five-minute GPU result
-has been validated in this repository's CPU tests.** No dataset recordings, model
-weights, or verified regulations were supplied. Motion, zero-shot descriptions, and
+has been validated in this repository's CPU tests.** No dataset recordings or model weights were supplied during initial implementation.
+Regulatory source text was subsequently checked for the bundled rules; that does
+not validate the visual model or determine legal liability. Motion, zero-shot descriptions, and
 self-reported confidence can all produce false positives or omissions. Occlusion,
 small objects, frame sampling, lighting, and ROI crops limit observations. Human
 review and labeled evaluation are required before relying on alerts.
 
 ## Validation recorded during implementation
 
-On 2026-10-17, Python 3.11.15: **61 tests passed, 1 skipped** in 4.29 seconds.
+Initial engine validation on 2026-10-17, Python 3.11.15: **61 tests passed, 1 skipped**
+in 4.29 seconds (before the subsequent cash-regulation tests).
 The skipped test requires a real local Qwen checkpoint. The suite emitted one
 upstream Starlette warning about its legacy httpx TestClient transport. Ruff lint,
 format checks, `git diff --check`, and CPU/GPU Compose configuration validation
@@ -320,3 +360,10 @@ Two synthetic, static, 160×120 MOVs at 10 decoded FPS were also measured with
 36 windows). These measurements include preprocessing and pipeline orchestration,
 but no neural inference, matched-event evidence, uploads, or queue wait. They are
 not evidence that the real deployment meets the five-minute jury limit.
+
+Cash-rule update validation: **77 tests passed, 1 real-model test skipped** in
+3.05 seconds on the development environment (Python 3.12). The 16 new tests cover
+the bundled catalogue, mandatory facts, uncertainties, timestamp grounding,
+non-violating P32 context, and prevention of fabricated cross-window conditions.
+After tightening P20 to exclude later recounting, all 16 cash-rule tests passed
+again. Real Qwen inference and detection accuracy have not been tested by these tests.

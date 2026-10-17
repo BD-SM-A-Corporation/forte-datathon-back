@@ -37,9 +37,12 @@ class Conditions(StrictModel):
     objects_all: list[str] = Field(default_factory=list)
     min_duration_sec: float = Field(0, ge=0)
     min_confidence: float = Field(0, ge=0, le=1)
+    facts_all: list[EventType] = Field(default_factory=list)
+    require_no_uncertainties: bool = False
 
 
 class Rule(StrictModel):
+    kind: Literal["potential_violation", "context"] = "potential_violation"
     id: str = Field(min_length=1)
     name: str = Field(min_length=1)
     source: Source
@@ -72,7 +75,7 @@ class RuleEngine:
 
     @property
     def configured(self) -> bool:
-        return bool(self.catalogue.rules)
+        return any(rule.kind == "potential_violation" for rule in self.catalogue.rules)
 
     def require_configured(self) -> None:
         if not self.configured:
@@ -85,10 +88,36 @@ class RuleEngine:
         return [
             rule
             for rule in self.catalogue.rules
-            if event.event_type in rule.observable_event_types
+            if rule.kind == "potential_violation"
+            and event.event_type in rule.observable_event_types
             and set(rule.conditions.objects_all) <= set(event.objects)
             and event.end_sec - event.start_sec >= rule.conditions.min_duration_sec
             and event.confidence >= rule.conditions.min_confidence
+            and set(rule.conditions.facts_all) <= set(event.facts)
+            and (not rule.conditions.require_no_uncertainties or not event.uncertainties)
+        ]
+
+    def needs_review(self, event: Observation) -> bool:
+        """A relevant action with missing context must not be presented as cleared."""
+        return (
+            bool(event.uncertainties)
+            or bool(self.context(event))
+            or (
+                any(
+                    rule.kind == "potential_violation"
+                    and event.event_type in rule.observable_event_types
+                    for rule in self.catalogue.rules
+                )
+                and not self.match(event)
+            )
+        )
+
+    def context(self, event: Observation) -> list[Rule]:
+        """Relevant source context never contributes to the jury violation verdict."""
+        return [
+            rule
+            for rule in self.catalogue.rules
+            if rule.kind == "context" and event.event_type in rule.observable_event_types
         ]
 
 

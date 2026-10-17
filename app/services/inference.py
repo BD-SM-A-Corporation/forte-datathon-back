@@ -32,7 +32,12 @@ def parse_observations(raw: str, frames: list[Frame]) -> list[Observation]:
     parsed = Observations.model_validate(json.loads(raw))
     timestamps = [f.timestamp_sec for f in frames]
     for event in parsed.events:
-        for timestamp in [event.start_sec, event.end_sec, *event.evidence_timestamps]:
+        for timestamp in [
+            event.start_sec,
+            event.end_sec,
+            *event.evidence_timestamps,
+            *(t for times in event.facts.values() for t in times),
+        ]:
             if not any(abs(timestamp - t) <= 0.001 for t in timestamps):
                 raise ValueError("Timestamp not grounded in supplied frames")
         # Normalize sub-millisecond model rounding to the actual decoded PTS.
@@ -41,6 +46,10 @@ def parse_observations(raw: str, frames: list[Frame]) -> list[Observation]:
         event.evidence_timestamps = sorted(
             {min(timestamps, key=lambda t: abs(t - x)) for x in event.evidence_timestamps}
         )
+        event.facts = {
+            name: sorted({min(timestamps, key=lambda t: abs(t - x)) for x in times})
+            for name, times in event.facts.items()
+        }
     return parsed.events
 
 
@@ -128,5 +137,11 @@ class MockObserver:
         return [
             e.model_copy(deep=True)
             for e in self.events
-            if {e.start_sec, e.end_sec, *e.evidence_timestamps} <= times
+            if {
+                e.start_sec,
+                e.end_sec,
+                *e.evidence_timestamps,
+                *(t for values in e.facts.values() for t in values),
+            }
+            <= times
         ]

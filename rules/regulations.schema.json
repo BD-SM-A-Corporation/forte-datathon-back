@@ -22,6 +22,19 @@
           "minimum": 0,
           "title": "Min Confidence",
           "type": "number"
+        },
+        "facts_all": {
+          "items": {
+            "pattern": "^[a-z][a-z0-9_]{0,63}$",
+            "type": "string"
+          },
+          "title": "Facts All",
+          "type": "array"
+        },
+        "require_no_uncertainties": {
+          "default": false,
+          "title": "Require No Uncertainties",
+          "type": "boolean"
         }
       },
       "title": "Conditions",
@@ -30,6 +43,15 @@
     "Rule": {
       "additionalProperties": false,
       "properties": {
+        "kind": {
+          "default": "potential_violation",
+          "enum": [
+            "potential_violation",
+            "context"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
         "id": {
           "minLength": 1,
           "title": "Id",

@@ -1,1 +1,126 @@
-{"rules": []}
+{
+  "rules": [
+    {
+      "id": "KZ_231_P20_COUNTING",
+      "name": "Возможный пересчёт принятой наличности после ухода клиента",
+      "kind": "potential_violation",
+      "source": {
+        "document": "Правила осуществления кассовых операций (постановление Правления НБРК от 29.11.2019 № 231)",
+        "section": "Глава 2, пункт 20",
+        "url": "https://adilet.zan.kz/rus/docs/V1900019680",
+        "jurisdiction": "KZ",
+        "verified_on": "2026-10-17",
+        "verified_by": "Automated official-source text verification via Adilet public API; see rules/sources/V1900019680.json",
+        "excerpt": "20. Наличные деньги принимаются и пересчитываются кассовым работником в присутствии клиента. \n \n На рабочем месте кассового работника находятся наличные деньги клиента. Все ранее принятые наличные деньги хранятся в специальных устройствах, находящихся на рабочем месте кассового работника, закрывающихся на ключ, предназначенных для хранения наличных денег (металлический шкаф, сейф, тележка, ящики стола, тумба)."
+      },
+      "observable_event_types": [
+        "cash_counting",
+        "cash_receipt",
+        "cash_like_object_handling"
+      ],
+      "conditions": {
+        "facts_all": [
+          "operator_role_supported",
+          "counterparty_role_supported",
+          "work_area_and_counterparty_visible",
+          "cash_receipt_visible",
+          "counterparty_departure_visible",
+          "counting_received_cash_after_departure",
+          "initial_receipt_counting_in_progress_at_departure"
+        ],
+        "min_confidence": 0.8,
+        "require_no_uncertainties": true
+      },
+      "applicability": "Только когда в одном окне прослеживаются приём одних и тех же банкнот, уход участвующего клиента и последующий пересчёт. Отсутствие клиента в кадре само по себе недостаточно. Должно быть видно, что первоначальный пересчёт при приёме ещё продолжался в момент ухода. Повторный пересчёт после завершённого обслуживания не является достаточным основанием.",
+      "explanation_template": "Видимая последовательность требует проверки по п. 20: приём и пересчёт наличности выполняются при клиенте. Это потенциальное несоответствие, а не установленное нарушение."
+    },
+    {
+      "id": "KZ_231_P20_STORAGE",
+      "name": "Возможное хранение ранее принятой наличности на открытой поверхности",
+      "kind": "potential_violation",
+      "source": {
+        "document": "Правила осуществления кассовых операций (постановление Правления НБРК от 29.11.2019 № 231)",
+        "section": "Глава 2, пункт 20",
+        "url": "https://adilet.zan.kz/rus/docs/V1900019680",
+        "jurisdiction": "KZ",
+        "verified_on": "2026-10-17",
+        "verified_by": "Automated official-source text verification via Adilet public API; see rules/sources/V1900019680.json",
+        "excerpt": "20. Наличные деньги принимаются и пересчитываются кассовым работником в присутствии клиента. \n \n На рабочем месте кассового работника находятся наличные деньги клиента. Все ранее принятые наличные деньги хранятся в специальных устройствах, находящихся на рабочем месте кассового работника, закрывающихся на ключ, предназначенных для хранения наличных денег (металлический шкаф, сейф, тележка, ящики стола, тумба)."
+      },
+      "observable_event_types": [
+        "cash_storage",
+        "cash_receipt",
+        "cash_like_object_handling",
+        "object_placement"
+      ],
+      "conditions": {
+        "facts_all": [
+          "operator_role_supported",
+          "counterparty_role_supported",
+          "work_area_and_counterparty_visible",
+          "cash_receipt_visible",
+          "prior_receipt_completed_visible",
+          "prior_cash_remains_on_open_surface"
+        ],
+        "min_confidence": 0.8,
+        "require_no_uncertainties": true
+      },
+      "applicability": "Нужны видимые завершение предшествующего приёма, переход к отдельному взаимодействию и сохранение той же ранее принятой наличности на открытой поверхности. Текущие деньги на столе не являются достаточным условием.",
+      "explanation_template": "Наблюдаемое размещение ранее принятой наличности требует проверки по п. 20 о хранении в предназначенных для этого запираемых устройствах. Требуется подтверждение контекста операции."
+    },
+    {
+      "id": "KZ_231_P22_DEPARTURE",
+      "name": "Возможный уход с рабочего места до окончания обслуживания",
+      "kind": "potential_violation",
+      "source": {
+        "document": "Правила осуществления кассовых операций (постановление Правления НБРК от 29.11.2019 № 231)",
+        "section": "Глава 2, пункт 22",
+        "url": "https://adilet.zan.kz/rus/docs/V1900019680",
+        "jurisdiction": "KZ",
+        "verified_on": "2026-10-17",
+        "verified_by": "Automated official-source text verification via Adilet public API; see rules/sources/V1900019680.json",
+        "excerpt": "22. Кассовому работнику не допускается покидать рабочее место до окончания обслуживания клиента."
+      },
+      "observable_event_types": [
+        "operator_leaving_workstation",
+        "person_leaving"
+      ],
+      "conditions": {
+        "facts_all": [
+          "operator_role_supported",
+          "counterparty_role_supported",
+          "work_area_and_counterparty_visible",
+          "operator_departure_visible",
+          "service_visibly_incomplete_at_departure",
+          "counterparty_remains_at_counter"
+        ],
+        "min_confidence": 0.8,
+        "require_no_uncertainties": true
+      },
+      "applicability": "Нужны видимое обслуживание кассовым оператором, сам уход и положительные признаки прерванного обслуживания этого же участника. Пустое кресло, ожидание или отсутствие человека в кадре недостаточны.",
+      "explanation_template": "Видимый уход при признаках незавершённого обслуживания требует проверки по п. 22. Наблюдение не устанавливает дисциплинарную или юридическую ответственность."
+    },
+    {
+      "id": "KZ_231_P32_PACKAGING_CONTEXT",
+      "name": "Контекст выдачи банкнот в упаковке без полистного пересчёта",
+      "kind": "context",
+      "source": {
+        "document": "Правила осуществления кассовых операций (постановление Правления НБРК от 29.11.2019 № 231)",
+        "section": "Глава 2, пункт 32",
+        "url": "https://adilet.zan.kz/rus/docs/V1900019680",
+        "jurisdiction": "KZ",
+        "verified_on": "2026-10-17",
+        "verified_by": "Automated official-source text verification via Adilet public API; see rules/sources/V1900019680.json",
+        "excerpt": "32. Кассовый работник выдает клиенту банкноты полными, неполными пачками и (или) отдельными корешками банкнот по обозначенным на упаковке суммам без полистного пересчета при условии сохранения неповрежденной упаковки. Банкноты из неполных, а также поврежденных корешков выдаются кассовым работником полистным пересчетом. \n \n Монеты, упакованные в мешки, выдаются по надписям на ярлыках, прикрепленных к мешкам, а упакованные в пакеты (тюбики, коробки) – по надписям на них. Монеты из неполных мешков выдаются кассовым работником с пересчетом по кружкам."
+      },
+      "observable_event_types": [
+        "cash_handover",
+        "object_transfer",
+        "cash_like_object_handling"
+      ],
+      "conditions": {},
+      "applicability": "Контекст для проверки человеком. Не создаёт нарушение и не подтверждает соблюдение всех условий п. 32. При неполных или повреждённых корешках применяются дополнительные требования, которые нельзя автоматически проверить по редким кадрам.",
+      "explanation_template": "Пункт 32 предусматривает выдачу определённых упаковок без полистного пересчёта. Невидимый пересчёт не доказывает его отсутствие; состояние и вид упаковки могут быть неразличимы."
+    }
+  ]
+}
