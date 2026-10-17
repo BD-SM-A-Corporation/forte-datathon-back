@@ -6,6 +6,286 @@ and Redis/RQ. It describes visible actions, then matches those
 observations against a locally maintained catalogue of verified Kazakhstan rules.
 It does not identify people or infer invisible transactions, intent, or authorization.
 
+## Запуск проекта с нуля и передача другому разработчику
+
+Основной путь ниже: **Linux + NVIDIA, backend в Docker, frontend на хосте**.
+На рабочем NixOS-хосте используется NVIDIA CDI и RTX 4060 Laptop 8 GB с `4bit`.
+Python, PyTorch, FFmpeg и компилятор для Triton устанавливает Dockerfile;
+для этого пути не нужен Python хоста (в частности, Python 3.14 не поддерживается
+`pyproject.toml`). CPU/DMR и разработка без Docker описаны далее отдельно.
+
+### 1. Что передать и установить
+
+Разместите два репозитория рядом; имя родительского каталога произвольное:
+
+```text
+project/
+  backend/    # этот репозиторий: Dockerfile, app/, rules/, docker-compose*.yml
+  front/      # отдельный репозиторий: package.json, bun.lock, src/, public/
+```
+
+Передайте актуальные исходники **обоих** репозиториев, включая новые файлы, а не
+только последний коммит, если изменения ещё не сохранены в Git. Веса модели,
+датасет, `.env`, `.env.local`, `node_modules` и Docker volumes в Git не входят.
+Ссылки на репозитории получите у владельца проекта; эта инструкция не требует
+локальных путей или учётных данных автора. Нужен отдельный MOV для проверки.
+
+Требования:
+
+- Docker Engine с Compose plugin и доступом текущего пользователя к Docker.
+- Рабочий драйвер NVIDIA и GPU-доступ из контейнеров: CDI **либо** NVIDIA runtime.
+- Node.js не ниже 20.9 и Bun **1.4.2** (версия из `front/package.json`).
+- Интернет для первой сборки, установки frontend и загрузки модели. После
+  подготовки обработка видео выполняется локально.
+- Место под Docker-образы, временные файлы сборки и примерно 7.5 GB весов;
+  оставьте запас в десятки GB. Достаточность VRAM проверяется реальным анализом.
+
+Проверки до запуска:
+
+```bash
+docker version
+docker compose version
+nvidia-smi
+node --version
+bun --version
+```
+
+На NixOS с уже настроенным NVIDIA-драйвером нужен
+`hardware.nvidia-container-toolkit.enable = true;` в конфигурации системы.
+После применения конфигурации проверьте
+`systemctl status nvidia-container-toolkit-cdi-generator.service` и наличие
+`/var/run/cdi/nvidia-container-toolkit.json`. Подробности — в разделе
+[NVIDIA on NixOS](#nvidia-on-nixos-cdi). Для другого Linux с NVIDIA runtime
+используйте альтернативный Compose-файл из следующего шага.
+
+### 2. Настроить backend один раз
+
+В терминале из каталога `project/backend`:
+
+```bash
+# Существующий .env не перезаписываем.
+test -f .env || cp .env.example .env
+openssl rand -hex 32
+```
+
+Сохраните сгенерированный секрет в `API_KEY` внутри `.env`. Для NixOS/CDI
+установите следующие значения, заменяя существующие строки без дубликатов:
+
+```dotenv
+API_KEY=<ваш_новый_секрет>
+COMPOSE_FILE=docker-compose.yml:docker-compose.gpu-cdi.yml
+INFERENCE_BACKEND=local
+MODEL_DEVICE=cuda
+MODEL_QUANTIZATION=4bit
+MODEL_WEIGHTS_DIR=./weights
+MODEL_INIT_OFFLINE=0
+```
+
+Для Linux с настроенным **NVIDIA runtime вместо CDI** измените только выбор файлов:
+
+```dotenv
+COMPOSE_FILE=docker-compose.yml:docker-compose.gpu.yml
+```
+
+Выберите один вариант; не объединяйте оба GPU override. Значение
+`MODEL_QUANTIZATION=none` из шаблона нужно явно заменить на `4bit` для указанной
+8 GB конфигурации. `MODEL_DEVICE=cuda` само по себе GPU в контейнер не подключает.
+
+**Все дальнейшие команды `docker compose` выполняйте из `backend/`.**
+Compose читает `COMPOSE_FILE` из `.env`, поэтому обычный `up` сохраняет GPU-настройку.
+Явный аргумент `-f` переопределяет этот выбор: не запускайте
+`docker compose -f docker-compose.yml up` для GPU-worker. Переменная
+`COMPOSE_FILE`, экспортированная в оболочке, также имеет приоритет над `.env`.
+Файл `.env` не нужно исполнять через `source`: значения читает Compose.
+
+### 3. Собрать образы, подготовить веса и запустить backend
+
+```bash
+docker compose config --quiet
+docker compose build model-init api
+docker compose run --rm --no-deps model-init
+docker compose up -d --no-build redis api worker
+docker compose ps -a
+curl --fail http://localhost:8000/health
+```
+
+API и worker используют один образ `forte-analysis:local`; сборки `api` достаточно
+для обоих. `model-init` скачивает закреплённую ревизию
+`66285546d2b821cf421d4f5eb2576359d3770cd3` модели Qwen2.5-VL-3B-Instruct в
+`weights/Qwen2.5-VL-3B-Instruct`, проверяет файлы и создаёт `.forte-checkpoint.json`.
+При `up` сервис инициализации также проверяет веса, после чего завершается с
+кодом `0`; это нормальное состояние. Прерванную загрузку можно продолжить
+повторением команды `run`. Не меняйте каталог весов во время анализа.
+
+Проверка **внутри рабочего контейнера**, включая реальную CUDA-операцию:
+
+```bash
+docker compose exec worker python -c 'import torch; assert torch.cuda.is_available(), "CUDA недоступна внутри worker"; print(torch.cuda.get_device_name(0)); print("CUDA test:", torch.ones(1, device="cuda").sum().item())'
+```
+
+Ожидается имя NVIDIA GPU и `CUDA test: 1.0`. Одного `nvidia-smi` на хосте
+недостаточно. `/health` проверяет API/Redis/реестр, но не запускает модель.
+Модель загружается при первом видео; готовность подтверждается анализом из шага 5.
+
+### 4. Собрать и запустить frontend
+
+В другом терминале из `project/front`:
+
+```bash
+test -f .env.local || cp .env.example .env.local
+```
+
+Заполните `.env.local`:
+
+```dotenv
+BACKEND_API_URL=http://127.0.0.1:8000
+BACKEND_API_KEY=<тот_же_секрет_что_API_KEY_в_backend>
+```
+
+Ключ используется сервером Next.js; не переименовывайте его в `NEXT_PUBLIC_*`.
+Затем:
+
+```bash
+bun install --frozen-lockfile
+bun run build
+bun start
+```
+
+Для разработки вместо последних двух команд: `bun dev`. Не запускайте dev и
+production одновременно на одном порту и не выполняйте сборку в `.next` работающего
+dev-сервера. `bun start` работает, пока запущен этот процесс; для постоянного
+развёртывания нужен отдельный менеджер процессов. Docker Compose backend **не
+собирает этот frontend**: его необязательный профиль `frontend` требует готового
+образа, которого данная инструкция не создаёт.
+
+Адреса: интерфейс — `http://localhost:3000`, Swagger — `http://localhost:8000/docs`,
+API — `http://localhost:8000/api/v1`. Если Next.js находится в контейнере,
+`127.0.0.1` указывает на сам контейнер: задайте адрес API, доступный из его сети
+(например, `http://api:8000` в общей Compose-сети). При доступе с другого компьютера
+используйте адрес хоста и проверьте firewall. Для публикации настройте доступ к
+UI/прокси, HTTPS и лимит загрузки reverse proxy; локальная команда запуска этого
+не делает. Подробности интерфейса: [README frontend](../front/README.md).
+
+### 5. Проверить полный цикл на одном видео
+
+В UI выберите MOV и нажмите «Начать анализ». Для проверки без frontend в Bash:
+
+```bash
+read -rsp 'API_KEY: ' FORTE_API_KEY
+printf '\n'
+curl --fail-with-body -sS http://localhost:8000/api/v1/analyze \
+  -H "x-api-key: $FORTE_API_KEY" \
+  -F 'file=@/absolute/path/to/video.mov;type=video/quicktime'
+```
+
+Подставьте свой путь к видео. Ответ содержит `job_id`; сохраните его и опрашивайте
+статус до `done` или `failed`:
+
+```bash
+FORTE_JOB_ID='<job_id_из_ответа>'
+curl --fail-with-body -sS "http://localhost:8000/api/v1/jobs/$FORTE_JOB_ID" \
+  -H "x-api-key: $FORTE_API_KEY"
+curl --fail-with-body -sS "http://localhost:8000/api/v1/jobs/$FORTE_JOB_ID/details" \
+  -H "x-api-key: $FORTE_API_KEY"
+unset FORTE_API_KEY
+```
+
+HTTP `200` при загрузке означает принятие задания, а не успешный анализ.
+`details: null` во время обработки допустим. Пять минут — бюджет обработки одного
+задания; ожидание очереди добавляется отдельно. Один worker обрабатывает видео
+последовательно. При истечении ожидания UI проверьте статус через API.
+
+Для диагностики:
+
+```bash
+docker compose logs --tail 100 worker
+docker compose logs --tail 100 api model-init
+# Непрерывный просмотр; выход Ctrl+C не останавливает контейнер:
+docker compose logs -f worker
+```
+
+Успешный запуск подтверждают `status: done`, заполненные `details`, доступные
+наблюдения и проверки условий в UI. `no_violation` означает отсутствие
+подтверждённого совпадения с настроенными правилами, а не доказательство соблюдения.
+Смотрите `rule_checks`, `verification_summary`, пропущенные проверки и неопределённости.
+Самооценка модели не является вероятностью нарушения; итог проверяет человек.
+
+### 6. Перезапуск и обновление без потери GPU
+
+Из `backend/`, с сохранённым `COMPOSE_FILE` в `.env`:
+
+```bash
+# Перезапуск тех же контейнеров, без изменения образов и переменных:
+docker compose restart api worker
+
+# После изменения исходников / Dockerfile: собрать и пересоздать оба процесса.
+docker compose build api
+docker compose up -d --no-build api worker
+
+# После изменения .env или GPU-конфигурации, без изменения кода:
+docker compose up -d --no-deps --force-recreate api worker
+
+# Остановить, сохранив контейнеры, очередь и результаты:
+docker compose stop
+# Запустить снова с сохранённым выбором GPU:
+docker compose up -d --no-build redis api worker
+```
+
+`restart` не подхватывает изменения `.env` и исходников. После обновления кода
+нужны сборка и пересоздание; после обновления правил — перезапуск обоих процессов
+для сброса кеша. Русский и английский реестры должны быть согласованы по SHA-256.
+Worker может завершать текущее задание до 310 секунд перед остановкой.
+После перезапуска повторите CUDA-проверку из шага 3. Failed-задания автоматически
+не повторяются; видео нужно загрузить заново. Для frontend после изменения кода:
+остановите процесс, выполните `bun install --frozen-lockfile`, `bun run build`
+и `bun start`; после изменения `.env.local` также перезапустите сервер.
+
+### 7. Частые ошибки
+
+| Симптом | Проверка и действие |
+| --- | --- |
+| `CUDA requested but no CUDA device is available` | Проверьте `COMPOSE_FILE` в `.env`, CDI/runtime на хосте и CUDA внутри worker. Пересоздайте worker с нужным override; перезапуск контейнера без GPU не добавляет устройство. |
+| GPU пропал после `up` | Контейнер мог быть пересоздан только по базовому файлу. Команда ниже показывает использованные Compose-файлы; в списке должен быть GPU override. |
+| `Job OK` после `analysis_failed` | RQ успешно завершил функцию, вернувшую объект ошибки. Смотрите `status`/`error` API и `analysis_failed`, а не только `Job OK`. |
+| `401` | Ключ запроса или `BACKEND_API_KEY` не совпадает с `API_KEY`. После изменения конфигурации пересоздайте backend и перезапустите frontend. |
+| UI сообщает о недоступности backend | Проверьте `/health`, `docker compose ps` и `BACKEND_API_URL` с точки зрения сервера Next.js. |
+| `model-init` завершился с ошибкой | Проверьте его логи, доступ к Hugging Face, место на диске и путь к весам. При неполной загрузке повторите `run`; офлайн-режим требует уже подготовленного каталога. |
+| `CUDA out of memory` | Проверьте `MODEL_QUANTIZATION=4bit`, другие GPU-процессы и отсутствие второго worker на той же GPU. Настройки числа/размера кадров влияют и на память, и на качество. |
+| Ошибка проверки реестра / перевода | Передайте оба JSON из одного состояния исходников; после изменений кода пересоберите API и worker. Не отключайте проверку SHA ради запуска. |
+| `Model output failed validation` | GPU уже мог работать, но ответ модели не прошёл схему или проверку времён. Смотрите `invalid_model_output`, лимит токенов и причину завершения в логах. Это не исправляется добавлением GPU override. |
+| `404` для прежнего job_id | Результаты хранятся 86400 секунд по умолчанию; загруженный файл удаляется после завершения/ошибки. Загрузите видео снова. |
+
+Команда для проверки реально применённых файлов (без вывода API-ключа):
+
+```bash
+docker inspect "$(docker compose ps -q worker)" \
+  --format '{{index .Config.Labels "com.docker.compose.project.config_files"}}'
+```
+
+### 8. Перенос на другую машину и офлайн-запуск
+
+Сохраните исходники обоих репозиториев и версии их коммитов, а также весь
+`weights/`, включая скрытые файлы и `.forte-checkpoint.json` в каталоге модели.
+На новой машине создайте свои `.env`/`.env.local`, настройте NVIDIA и повторите
+шаги выше. Для заранее подготовленных весов без интернета поставьте
+`MODEL_INIT_OFFLINE=1`. Если новая машина совсем без сети, заранее перенесите
+также Docker-образы backend, model-init и Redis через `docker save`/`docker load`
+и подготовьте frontend с его зависимостями для той же платформы. Одних весов
+недостаточно для офлайн-сборки; Dockerfile и `bun install` обычно требуют сети.
+
+История заданий находится в Docker volume Redis, временные загрузки — в другом
+volume; исходники их не переносят. Не используйте `docker compose down -v` при
+обычном обновлении: эта команда удаляет volumes. Если нужна история, отдельно
+подготовьте резервную копию Redis. Исходное видео API не хранит после анализа.
+
+Проверка на рабочем хосте 2026-10-17: второй проход завершил X-1 за 227 секунд и
+Х-10 за 219 секунд (без ожидания очереди); по 4 проверки условий. Это проверка
+работоспособности цепочки, **не качества детекции**: положительная метка X-1
+осталась неподтверждённой. Для приёмки нового развёртывания нужен свой полный
+тест из шага 5, а для оценки качества — отдельная размеченная выборка.
+
+---
+
 This repository already used a root-level `app/` layout, so that layout is retained
 instead of adding a second `backend/` directory. No frontend source exists here.
 The obsolete API imported nonexistent modules; it has been replaced, along with
@@ -267,6 +547,7 @@ All settings use environment variables or `.env`; `.env.example` lists defaults.
 | `API_KEY`, `CORS_ORIGINS` | Required secret; JSON list of allowed browser origins |
 | `REDIS_URL`, `QUEUE_NAME` | Queue and result storage |
 | `UPLOAD_DIR`, `RULES_PATH` | Shared recordings and validated JSON catalogue |
+| `MODEL_RULES_PATH` | English model catalogue, default `rules/regulations.en.json`; must match the Russian catalogue |
 | `MAX_UPLOAD_MB` | File limit, default 512 MiB; multipart body has 64 KiB overhead allowance |
 | `MAX_DURATION_SEC` | Maximum accepted video duration, default 150 seconds |
 | `MAX_VIDEO_PIXELS`, `MAX_DECODED_FRAMES` | Decode resource bounds, defaults 8,294,400 and 18,000 |
@@ -284,6 +565,10 @@ All settings use environment variables or `.env`; `.env.example` lists defaults.
 | `MAX_NEW_TOKENS`, `MAX_FRAMES_PER_WINDOW` | Generation cap 512 (local Qwen retries allow twice this); input cap 12 |
 | `GENERATION_RETRIES` | Retry malformed JSON once by default, max 2 |
 | `MAX_REFINEMENT_WINDOWS` | Bound additional inspection, default 8 |
+| `RULE_VERIFICATION_ENABLED`, `MAX_RULE_CHECKS` | Independent visual fact checks, enabled; at most 4 candidate/rule pairs |
+| `VERIFICATION_CONTEXT_SEC` | Include up to 6 seconds before and after the candidate |
+| `VERIFICATION_RESERVE_SEC` | Reserve 140 seconds from optional refinement for fact checks |
+| `VERIFICATION_CHECK_TIMEOUT_SEC`, `VERIFICATION_MAX_NEW_TOKENS` | Per-check limits: 40 seconds and 768 tokens |
 | `PROCESSING_BUDGET_SEC` | Default 300-second worker timeout; bounds stages, local generation, and DMR requests/retries |
 | `QUEUE_TTL_SEC`, `RESULT_TTL_SEC` | Queue expiry 3600 seconds; result/failure retention 86400 seconds |
 | `EVENT_MERGE_GAP_SEC` | Duplicate-event gap tolerance, default 0.2 seconds |
@@ -313,7 +598,23 @@ score is the fraction of pixels whose difference exceeds the grayscale threshold
 after 3×3 morphological opening. Adjacent intervals merge and retain the peak score.
 This is **not a probability of a violation**. Motion and initial event candidates
 request extra windows; `IntervalProvider` allows future local detectors to propose
-intervals in original-video seconds. Suspected events receive refinement priority.
+intervals in original-video seconds. Refinement windows are spread across the
+timeline so the beginning cannot consume every available slot.
+
+After observation, a second pass checks each required fact for selected candidate/rule
+pairs against actual frames, including surrounding context. Candidate selection
+prioritizes different rules and separated times. The verifier receives visual
+questions and the interval, never the first pass's description or confidence as
+evidence. Each fact is confirmed, contradicted, or unknown, with an explanation and
+grounded timestamps. A separate check establishes whether the facts concern the
+same service episode. This is another pass of the same model, not independent ground truth.
+
+With verification enabled, only fully supported checks can produce potential rule
+matches. Original observations remain unchanged. `/details` exposes `rule_checks`
+and `verification_summary`, including unknown facts, timeouts and skipped candidates.
+These states never establish compliance. The legacy `verdict: no_violation` means
+no supported match and can include incomplete checks; use the details and mandatory
+human-review assessment. The frontend explicitly shows insufficient evidence.
 
 JSON validation requires all event boundaries and evidence times to correspond to
 supplied frames (up to 1 ms rounding, normalized back to exact PTS). Event types are
@@ -351,6 +652,28 @@ matched event, with no ROI, overlay, generated content, or identity recognition.
 `rules/regulations.schema.json` defines the strict catalogue schema. The application
 validates it at API and worker startup. Missing/malformed files prevent startup;
 an empty valid catalogue allows startup but fails analysis verdicts explicitly.
+
+`rules/regulations.json` remains the Russian source for deterministic matching,
+API responses, rule names, explanations and official excerpts shown by the frontend.
+`rules/regulations.en.json` contains an English working translation of all 11 rules,
+including names, source descriptions/excerpts, applicability and explanations.
+Its `translation_note` explicitly identifies the excerpts as unofficial translations;
+source verification metadata applies to the Russian originals.
+
+The worker and real-model benchmark read `observation_guidance` from the English
+catalogue for both local Qwen and DMR. Only these concise action instructions go into
+the observation prompt; the full legal texts are not added to every inference window.
+These instructions were already English before the split, so the split itself does
+not improve detection accuracy or fix empty `facts` responses.
+
+Worker startup checks that both files have identical IDs, rule kinds, event types,
+conditions, source URLs, jurisdictions and verification dates. The English file's
+`translated_from_sha256` must match the exact bytes of the Russian file. After editing
+the Russian catalogue, review/update the translation and then update this hash
+(`sha256sum rules/regulations.json`). Updating the hash alone does not verify semantic
+equivalence. A missing, outdated or structurally divergent translation stops worker
+startup rather than silently using a different set of rules. Custom catalogues need
+a corresponding `MODEL_RULES_PATH`; injected test settings may set it to `None`.
 
 Before adding a production rule, a qualified reviewer must verify the currently
 applicable Kazakhstan act, exact section, quotation, applicability to this banking

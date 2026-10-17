@@ -1,0 +1,309 @@
+{
+  "language": "en",
+  "translation_note": "Unofficial English working translation of regulations.json, including its Russian source excerpts. Source verification metadata refers to the Russian originals, not to an official English translation. The Russian catalogue remains authoritative for matching, API results and the frontend. This translation does not expand the scope of any rule.",
+  "translated_from_sha256": "e6eb52fa64b8e8d38b913fac7fa4dbb762e14af5e3316d8993a0b509e8e84805",
+  "rules": [
+    {
+      "id": "KZ_231_P20_COUNTING",
+      "name": "Possible counting of received cash after the customer leaves",
+      "kind": "potential_violation",
+      "source": {
+        "document": "Rules for Cash Operations (Resolution No. 231 of the Board of the National Bank of Kazakhstan dated 29 November 2019)",
+        "section": "Chapter 2, paragraph 20",
+        "url": "https://adilet.zan.kz/rus/docs/V1900019680",
+        "jurisdiction": "KZ",
+        "verified_on": "2026-10-17",
+        "verified_by": "Official Adilet API text comparison; visual applicability requires human review",
+        "excerpt": "20. Cash shall be received and counted by the cash-handling employee in the presence of the customer. The cash at the cash-handling employee's workstation shall be the customer's cash. All previously received cash shall be stored in special devices located at the cash-handling employee's workstation, lockable with a key and intended for cash storage (a metal cabinet, safe, trolley, desk drawers, or pedestal cabinet)."
+      },
+      "observable_event_types": [
+        "cash_counting",
+        "cash_receipt",
+        "cash_like_object_handling"
+      ],
+      "conditions": {
+        "facts_all": [
+          "operator_role_supported",
+          "counterparty_role_supported",
+          "work_area_and_counterparty_visible",
+          "cash_receipt_visible",
+          "counterparty_departure_visible",
+          "counting_received_cash_after_departure",
+          "initial_receipt_counting_in_progress_at_departure"
+        ],
+        "min_confidence": 0.8,
+        "require_no_uncertainties": true
+      },
+      "applicability": "Applies only when receipt of the same banknotes, the participating customer leaving, and subsequent counting can be traced within one window. The customer being absent from the frame is not sufficient. The initial counting during receipt must visibly still be in progress at departure. A later recount after completed service is not sufficient grounds.",
+      "explanation_template": "The visible sequence requires review under paragraph 20: cash is received and counted in the presence of the customer. This is a potential discrepancy, not an established violation.",
+      "observation_guidance": "Track the same received banknotes, visible initial counting, and counterparty departure. Do not confuse a later recount with interrupted receipt counting."
+    },
+    {
+      "id": "KZ_231_P20_STORAGE",
+      "name": "Possible storage of previously received cash on an open surface",
+      "kind": "potential_violation",
+      "source": {
+        "document": "Rules for Cash Operations (Resolution No. 231 of the Board of the National Bank of Kazakhstan dated 29 November 2019)",
+        "section": "Chapter 2, paragraph 20",
+        "url": "https://adilet.zan.kz/rus/docs/V1900019680",
+        "jurisdiction": "KZ",
+        "verified_on": "2026-10-17",
+        "verified_by": "Official Adilet API text comparison; visual applicability requires human review",
+        "excerpt": "20. Cash shall be received and counted by the cash-handling employee in the presence of the customer. The cash at the cash-handling employee's workstation shall be the customer's cash. All previously received cash shall be stored in special devices located at the cash-handling employee's workstation, lockable with a key and intended for cash storage (a metal cabinet, safe, trolley, desk drawers, or pedestal cabinet)."
+      },
+      "observable_event_types": [
+        "cash_storage",
+        "cash_receipt",
+        "cash_like_object_handling",
+        "object_placement"
+      ],
+      "conditions": {
+        "facts_all": [
+          "operator_role_supported",
+          "counterparty_role_supported",
+          "work_area_and_counterparty_visible",
+          "cash_receipt_visible",
+          "prior_receipt_completed_visible",
+          "prior_cash_remains_on_open_surface"
+        ],
+        "min_confidence": 0.8,
+        "require_no_uncertainties": true
+      },
+      "applicability": "Requires a visible end to the earlier receipt, a transition to a separate interaction, and the same previously received cash remaining on an open surface. Cash currently being handled on the desk is not sufficient.",
+      "explanation_template": "The observed placement of previously received cash requires review under paragraph 20 concerning storage in designated lockable devices. The transaction context must be confirmed.",
+      "observation_guidance": "Track previously received cash across a clearly completed receipt into a separate interaction. Distinguish current cash from prior cash left on the surface."
+    },
+    {
+      "id": "KZ_231_P22_DEPARTURE",
+      "name": "Possible departure from the workstation before customer service is completed",
+      "kind": "potential_violation",
+      "source": {
+        "document": "Rules for Cash Operations (Resolution No. 231 of the Board of the National Bank of Kazakhstan dated 29 November 2019)",
+        "section": "Chapter 2, paragraph 22",
+        "url": "https://adilet.zan.kz/rus/docs/V1900019680",
+        "jurisdiction": "KZ",
+        "verified_on": "2026-10-17",
+        "verified_by": "Official Adilet API text comparison; visual applicability requires human review",
+        "excerpt": "22. The cash-handling employee shall not leave the workstation before completing service to the customer."
+      },
+      "observable_event_types": [
+        "operator_leaving_workstation",
+        "person_leaving"
+      ],
+      "conditions": {
+        "facts_all": [
+          "operator_role_supported",
+          "counterparty_role_supported",
+          "work_area_and_counterparty_visible",
+          "operator_departure_visible",
+          "service_visibly_incomplete_at_departure",
+          "counterparty_remains_at_counter"
+        ],
+        "min_confidence": 0.8,
+        "require_no_uncertainties": true
+      },
+      "applicability": "Requires visible service by the cash operator, the actual departure, and positive signs that service to the same participant was interrupted. An empty chair, a waiting person, or someone being absent from the frame is not sufficient.",
+      "explanation_template": "Visible departure with signs of unfinished service requires review under paragraph 22. The observation does not establish disciplinary or legal liability.",
+      "observation_guidance": "Track the operator leaving the workstation while the same service is visibly unfinished and the counterparty remains. Sitting, turning or reaching alone is not departure."
+    },
+    {
+      "id": "KZ_231_P32_PACKAGING_CONTEXT",
+      "name": "Context for issuing packaged banknotes without counting each note",
+      "kind": "context",
+      "source": {
+        "document": "Rules for Cash Operations (Resolution No. 231 of the Board of the National Bank of Kazakhstan dated 29 November 2019)",
+        "section": "Chapter 2, paragraph 32",
+        "url": "https://adilet.zan.kz/rus/docs/V1900019680",
+        "jurisdiction": "KZ",
+        "verified_on": "2026-10-17",
+        "verified_by": "Official Adilet API text comparison; visual applicability requires human review",
+        "excerpt": "32. The cash-handling employee shall issue banknotes to the customer in full or incomplete packs and/or individual banknote bundles according to the amounts indicated on the packaging, without counting each note, provided the packaging remains undamaged. Banknotes from incomplete or damaged bundles shall be issued by the cash-handling employee with note-by-note counting. Coins packed in bags shall be issued according to the inscriptions on the labels attached to the bags, and coins packed in packets (tubes, boxes) according to the inscriptions on them. Coins from incomplete bags shall be issued by the cash-handling employee with coin-by-coin counting."
+      },
+      "observable_event_types": [
+        "cash_handover",
+        "object_transfer",
+        "cash_like_object_handling"
+      ],
+      "conditions": {},
+      "applicability": "Context for human review. Does not generate a violation or confirm compliance with all conditions of paragraph 32. Incomplete or damaged banknote bundles are subject to additional requirements that cannot be checked automatically using sparse frames.",
+      "explanation_template": "Paragraph 32 permits certain packages to be issued without counting each note. Counting not being visible does not prove it was omitted; package type and condition may be indistinguishable.",
+      "observation_guidance": "Describe cash handover and visible packaging. Do not infer that counting was omitted, or that a package is authentic, from sampled frames."
+    },
+    {
+      "id": "KZ_231_P20_CLOTHING_STORAGE",
+      "name": "Possible placement of previously received cash in a clothing pocket",
+      "kind": "potential_violation",
+      "source": {
+        "document": "Rules for Cash Operations (Resolution No. 231 of the Board of the National Bank of Kazakhstan dated 29 November 2019)",
+        "section": "Chapter 2, paragraph 20",
+        "url": "https://adilet.zan.kz/rus/docs/V1900019680",
+        "jurisdiction": "KZ",
+        "verified_on": "2026-10-17",
+        "verified_by": "Official Adilet API text comparison; visual applicability requires human review",
+        "excerpt": "20. Cash shall be received and counted by the cash-handling employee in the presence of the customer. The cash at the cash-handling employee's workstation shall be the customer's cash. All previously received cash shall be stored in special devices located at the cash-handling employee's workstation, lockable with a key and intended for cash storage (a metal cabinet, safe, trolley, desk drawers, or pedestal cabinet)."
+      },
+      "observable_event_types": [
+        "cash_pocketing",
+        "cash_storage",
+        "cash_like_object_handling"
+      ],
+      "conditions": {
+        "facts_all": [
+          "operator_role_supported",
+          "counterparty_role_supported",
+          "work_area_and_counterparty_visible",
+          "cash_receipt_visible",
+          "prior_receipt_completed_visible",
+          "clothing_pocket_storage_visible"
+        ],
+        "min_confidence": 0.8,
+        "require_no_uncertainties": true
+      },
+      "applicability": "The same received banknotes must be traced from the visible completion of receipt to insertion into a distinguishable clothing pocket of the operator. Touching clothing, hand occlusion, personal money, documents, or an indistinguishable object is not sufficient. Ownership of the money and intent are not established.",
+      "explanation_template": "Paragraph 20 provides for storing previously received cash in designated lockable devices. Observed placement of those same banknotes into clothing requires human review.",
+      "observation_guidance": "Use cash_pocketing only when the same previously received banknotes visibly enter a clothing pocket after receipt completion. A hand moving below the desk is insufficient. Record clothing_pocket_storage_visible only for an actual visible pocket insertion."
+    },
+    {
+      "id": "KZ_231_P12_PERSONAL_ITEMS_CONTEXT",
+      "name": "Personal belongings and devices in the cash area: applicability review",
+      "kind": "context",
+      "source": {
+        "document": "Rules for Cash Operations (Resolution No. 231 of the Board of the National Bank of Kazakhstan dated 29 November 2019)",
+        "section": "Chapter 2, paragraph 12",
+        "url": "https://adilet.zan.kz/rus/docs/V1900019680",
+        "jurisdiction": "KZ",
+        "verified_on": "2026-10-17",
+        "verified_by": "Official Adilet API text comparison; visual applicability requires human review",
+        "excerpt": "12. Bank employees' personal belongings, cash, and valuables shall be stored outside the cash-handling unit in accordance with the bank's internal documents. Bank employees may bring medicines, medical devices, and communication devices without photo or video recording functions into the cash-handling unit."
+      },
+      "observable_event_types": [
+        "phone_interaction",
+        "personal_item_placement",
+        "bag_placement"
+      ],
+      "conditions": {},
+      "applicability": "The reviewer establishes the boundaries of the cash-handling unit, ownership of the item, and its functions. A visible phone does not establish photo or video recording capability; medical devices and permitted communication devices are covered by exceptions. No automatic violation alert is generated.",
+      "explanation_template": "Paragraph 12 regulates storage of employees' personal belongings outside the cash-handling unit and permits certain categories of items. The presence of an item alone does not establish a violation.",
+      "observation_guidance": "Describe visible operator phone use or bag/item placement and the location. Do not infer personal ownership, camera capability, medical purpose, or permission."
+    },
+    {
+      "id": "KZ_231_P19_RECEIPT_CONTEXT",
+      "name": "Cash receipt: counting and completion of the transaction",
+      "kind": "context",
+      "source": {
+        "document": "Rules for Cash Operations (Resolution No. 231 of the Board of the National Bank of Kazakhstan dated 29 November 2019)",
+        "section": "Chapter 2, paragraph 19",
+        "url": "https://adilet.zan.kz/rus/docs/V1900019680",
+        "jurisdiction": "KZ",
+        "verified_on": "2026-10-17",
+        "verified_by": "Official Adilet API text comparison; visual applicability requires human review",
+        "excerpt": "19. The bank's cash-handling employee shall perform the following actions: 1) visually identify the customer depositing cash using an identity document or information confirming (identifying) the customer's identity obtained through the digital document service; 2) accept banknotes with note-by-note counting and coins with coin-by-coin counting, checking the authenticity and fitness for payment of the cash in accordance with paragraphs 57 and 58 of the Rules; 3) check for the customer's signature and, where an operations employee is involved, that employee's signature, and compare them with the available specimen signatures; 4) compare the amount stated in the cash receipt document with the total amount of cash actually received; 5) sign all copies of the cash receipt document and affix the bank cash-handling employee's stamp to all copies of that document; 6) issue the customer a document confirming the cash receipt transaction."
+      },
+      "observable_event_types": [
+        "cash_receipt",
+        "cash_counting",
+        "document_handover",
+        "cash_like_object_handling"
+      ],
+      "conditions": {},
+      "applicability": "Observe the direction of banknote transfer, hand movements or counting-machine use, and document handover. Sparse frames do not prove counting was skipped; banknote authenticity, the amount, signatures, and digital identification cannot be verified from this video.",
+      "explanation_template": "Paragraph 19 describes actions during cash receipt, including counting and issuing a confirmation document. Incomplete video calls for clarification, not a finding that an action did not occur.",
+      "observation_guidance": "Track counterparty-to-operator cash transfer, visible counting or counting-machine use, and document handover. Keep actions separate; missing frames cannot establish a skipped step."
+    },
+    {
+      "id": "KZ_231_P31_ISSUE_CONTEXT",
+      "name": "Cash issuance: sequence of actions in the customer's presence",
+      "kind": "context",
+      "source": {
+        "document": "Rules for Cash Operations (Resolution No. 231 of the Board of the National Bank of Kazakhstan dated 29 November 2019)",
+        "section": "Chapter 2, paragraph 31",
+        "url": "https://adilet.zan.kz/rus/docs/V1900019680",
+        "jurisdiction": "KZ",
+        "verified_on": "2026-10-17",
+        "verified_by": "Official Adilet API text comparison; visual applicability requires human review",
+        "excerpt": "31. The bank's cash-handling employee shall perform the following actions: 1) visually identify the customer using identity document data or information confirming (identifying) the customer's identity obtained through the digital document service; 2) check for the customer's signature and, where an operations employee is involved, that employee's signature, and compare them with the available specimen signatures; 3) prepare the amount of cash to be issued; 4) count the cash prepared for issuance in the presence of the customer and issue the cash to the customer; 5) sign all copies of the cash disbursement document and affix the bank cash-handling employee's stamp to all copies of that document; 6) issue the customer a document confirming the cash disbursement transaction."
+      },
+      "observable_event_types": [
+        "cash_handover",
+        "cash_counting",
+        "object_transfer",
+        "document_handover"
+      ],
+      "conditions": {},
+      "applicability": "Review visible preparation, counting, and handover of the same amount to the customer. Account for the packaging exceptions in paragraph 32. Do not infer that counting or document checking was skipped because the action is absent from individual frames.",
+      "explanation_template": "Subparagraph 4 of paragraph 31 describes counting prepared cash in the customer's presence and issuing it. Review the entire sequence and the conditions of paragraph 32.",
+      "observation_guidance": "Track operator-to-counterparty transfer, counting before handover, and whether both participants remain visible. Report object_transfer if the object is unclear; never infer skipped counting from sparse frames."
+    },
+    {
+      "id": "KZ_231_P24_COLLECTION_BAG_CONTEXT",
+      "name": "Receipt of a cash-collection bag: integrity and sealing",
+      "kind": "context",
+      "source": {
+        "document": "Rules for Cash Operations (Resolution No. 231 of the Board of the National Bank of Kazakhstan dated 29 November 2019)",
+        "section": "Chapter 2, paragraph 24",
+        "url": "https://adilet.zan.kz/rus/docs/V1900019680",
+        "jurisdiction": "KZ",
+        "verified_on": "2026-10-17",
+        "verified_by": "Official Adilet API text comparison; visual applicability requires human review",
+        "excerpt": "24. Cash operations for receiving a customer's cash from a bank cash-collection unit or a cash-collection organization shall be performed by the bank's cash-handling employee on the basis of an accompanying document meeting the requirements of paragraph 106 of the Rules. The cash-handling employee shall: 1) check that the accompanying document contains the necessary information specified in paragraph 106 of the Rules; 2) record the amount of cash received in accordance with the bank's internal documents; 3) check the integrity of the bag; 4) check that the bag is properly sealed."
+      },
+      "observable_event_types": [
+        "collection_bag_handover",
+        "bag_handover",
+        "bag_inspection",
+        "bag_opening"
+      ],
+      "conditions": {},
+      "applicability": "Observe bag handover, inspection, and opening. A cash-collection function must be supported by the context of transferring valuables, not by clothing. Damage, seals, and accompanying documents may be indistinguishable; inspection not appearing in sampled frames does not prove it was skipped.",
+      "explanation_template": "Paragraph 24 requires checking the integrity and sealing of a received cash-collection bag. Paragraph 25 separately regulates actions when damage is discovered; applicability is reviewed by a person.",
+      "observation_guidance": "Describe bag handover, inspection, visible seal area, damage or opening. Use collection_bag_handover only with cash-collection context; otherwise bag_handover. Clothing does not establish a collector role."
+    },
+    {
+      "id": "KZ_231_P35_CLIENT_COUNTING_CONTEXT",
+      "name": "Customer movement and counting of received cash",
+      "kind": "context",
+      "source": {
+        "document": "Rules for Cash Operations (Resolution No. 231 of the Board of the National Bank of Kazakhstan dated 29 November 2019)",
+        "section": "Chapter 2, paragraph 35",
+        "url": "https://adilet.zan.kz/rus/docs/V1900019680",
+        "jurisdiction": "KZ",
+        "verified_on": "2026-10-17",
+        "verified_by": "Official Adilet API text comparison; visual applicability requires human review",
+        "excerpt": "35. The customer shall count received cash without leaving the cash desk, or in a room for customers to count cash in the presence of a cash-handling employee or a supervising employee. If counting reveals a cash shortage or surplus, the cash-handling employee or supervising employee shall draw up a shortage or surplus report in a form determined by the bank. A customer's claim concerning a shortage or the discovery of cash unfit for payment or of doubtful authenticity shall not be satisfied if the cash was not counted by the customer without leaving the bank's cash desk, under the supervision of the cash-handling employee who issued the cash or a supervising employee."
+      },
+      "observable_event_types": [
+        "counterparty_leaving",
+        "counterparty_cash_counting",
+        "cash_handover"
+      ],
+      "conditions": {},
+      "applicability": "Observe receipt of banknotes, the start of counting, and customer movement. Leaving the desk does not prove a violation: a separate counting room is permitted, and the purpose of the destination area and supervision by another employee may be outside the frame.",
+      "explanation_template": "Paragraph 35 provides for customer counting at the cash desk or in a counting room in the presence of an employee. The route and conditions need clarification; departure alone does not generate an automatic violation.",
+      "observation_guidance": "Track the counterparty receiving cash, visibly counting it, standing up or moving away. Distinguish operator movement from counterparty movement. Do not infer the destination or absence of supervision."
+    },
+    {
+      "id": "KZ_14_P8_ACCESS_CONTEXT",
+      "name": "Movement through the service entrance of the cash-handling unit",
+      "kind": "context",
+      "source": {
+        "document": "Rules for the Organization of Security and Arrangement of Premises (Resolution No. 14 of the Board of the National Bank of Kazakhstan dated 24 February 2020)",
+        "section": "Chapter 3, paragraph 8",
+        "url": "https://adilet.zan.kz/rus/docs/V2000020075",
+        "jurisdiction": "KZ",
+        "verified_on": "2026-10-17",
+        "verified_by": "Official Adilet API text comparison; visual applicability requires human review",
+        "excerpt": "8. The cash-handling unit shall be isolated from other operational, utility, basement, and service premises by a single closable service entrance. An additional closable entrance may be provided for loading and unloading cash and valuables in a loading bay or on a loading and unloading platform."
+      },
+      "observable_event_types": [
+        "cash_zone_entry",
+        "door_opening",
+        "person_entering",
+        "person_leaving"
+      ],
+      "conditions": {},
+      "applicability": "Observe crossings of a distinguishable doorway and the state of the opening. The purpose of the doorway and boundaries of the cash-handling unit require confirmation. A requirement for a closable entrance does not mean every opening of the door is a violation; a person's authorization cannot be determined from appearance.",
+      "explanation_template": "Paragraph 8 requires the cash-handling unit to be isolated by a closable service entrance and permits an additional loading entrance. Video helps locate an episode for review of the area's layout.",
+      "observation_guidance": "Describe actual crossings of a visible doorway and door movement. Do not label a person unauthorized or assume that an open door violates a rule."
+    }
+  ]
+}

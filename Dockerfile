@@ -31,6 +31,6 @@ COPY rules ./rules
 RUN useradd --uid 10001 --create-home engine && mkdir -p /app/storage/uploads /models \
     && chown -R engine:engine /app/storage /models
 USER engine
-RUN python -c "from pathlib import Path; from app.services.rules import RuleEngine; RuleEngine.load(Path('/app/rules/regulations.json'))"
+RUN python -c "from pathlib import Path; from app.services.rules import RuleEngine; RuleEngine.load(Path('/app/rules/regulations.json'), model_path=Path('/app/rules/regulations.en.json'))"
 EXPOSE 8000
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

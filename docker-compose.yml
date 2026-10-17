@@ -11,6 +11,7 @@ x-backend: &backend
     REDIS_URL: redis://redis:6379/0
     UPLOAD_DIR: /app/storage/uploads
     RULES_PATH: /app/rules/regulations.json
+    MODEL_RULES_PATH: /app/rules/regulations.en.json
     QWEN_MODEL_PATH: /models/Qwen2.5-VL-3B-Instruct
     HF_HUB_OFFLINE: "1"
     TRANSFORMERS_OFFLINE: "1"

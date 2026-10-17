@@ -13,6 +13,7 @@ class Settings(BaseSettings):
     queue_name: str = "analysis"
     upload_dir: Path = Path("storage/uploads")
     rules_path: Path = Path("rules/regulations.json")
+    model_rules_path: Path | None = Path("rules/regulations.en.json")
     max_upload_mb: int = Field(512, ge=1)
     max_duration_sec: float = Field(150, gt=0)
     max_video_pixels: int = Field(3840 * 2160, gt=0)
@@ -37,6 +38,12 @@ class Settings(BaseSettings):
     max_frames_per_window: int = Field(12, ge=2)
     generation_retries: int = Field(1, ge=0, le=2)
     max_refinement_windows: int = Field(8, ge=0)
+    rule_verification_enabled: bool = True
+    max_rule_checks: int = Field(4, ge=1, le=16)
+    verification_context_sec: float = Field(6, ge=0, le=30)
+    verification_reserve_sec: float = Field(140, gt=0)
+    verification_check_timeout_sec: float = Field(40, gt=0)
+    verification_max_new_tokens: int = Field(768, ge=128, le=2048)
     processing_budget_sec: int = Field(300, ge=1)
     result_ttl_sec: int = Field(86400, ge=60)
     queue_ttl_sec: int = Field(3600, ge=60)

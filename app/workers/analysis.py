@@ -11,6 +11,7 @@ from app.services.inference import create_observer
 from app.services.jobs import JobStore
 from app.services.pipeline import Pipeline
 from app.services.rules import RuleEngine
+from app.services.verification import RuleVerifier
 
 logger = logging.getLogger(__name__)
 _pipeline: Pipeline | None = None
@@ -20,12 +21,11 @@ def get_pipeline() -> Pipeline:
     global _pipeline
     if _pipeline is None:
         settings = Settings()
-        rules = RuleEngine.load(settings.rules_path)
-        _pipeline = Pipeline(
-            settings,
-            create_observer(settings, rule_guidance=rules.observation_guidance()),
-            rules,
-        )
+        rules = RuleEngine.load(settings.rules_path, model_path=settings.model_rules_path)
+        observer = create_observer(settings, rule_guidance=rules.observation_guidance())
+        _pipeline = Pipeline(settings, observer, rules, verifier=(
+            RuleVerifier(settings, observer) if settings.rule_verification_enabled else None
+        ))
     return _pipeline
 
 
@@ -59,7 +59,7 @@ def main() -> None:
     configure_logging()
     settings = Settings()
     RuleEngine.load(
-        settings.rules_path
+        settings.rules_path, model_path=settings.model_rules_path
     )  # Validate at process startup, including an empty catalogue.
     store = JobStore(settings)
     # SimpleWorker preserves local model/CUDA state. DMR owns its own model lifecycle.

@@ -13,7 +13,9 @@ from app.services.rules import Catalogue, RuleEngine
 
 @pytest.fixture
 def settings(tmp_path: Path) -> Settings:
-    return Settings(_env_file=None, api_key="test-key", upload_dir=tmp_path / "uploads")
+    return Settings(
+        _env_file=None, api_key="test-key", upload_dir=tmp_path / "uploads", model_rules_path=None
+    )
 
 
 @pytest.fixture

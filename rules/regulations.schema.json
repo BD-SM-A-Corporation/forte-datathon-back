@@ -159,6 +159,33 @@
   },
   "additionalProperties": false,
   "properties": {
+    "language": {
+      "default": "ru",
+      "enum": [
+        "ru",
+        "en"
+      ],
+      "title": "Language",
+      "type": "string"
+    },
+    "translation_note": {
+      "default": "",
+      "title": "Translation Note",
+      "type": "string"
+    },
+    "translated_from_sha256": {
+      "anyOf": [
+        {
+          "pattern": "^[a-f0-9]{64}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Translated From Sha256"
+    },
     "rules": {
       "items": {
         "$ref": "#/$defs/Rule"

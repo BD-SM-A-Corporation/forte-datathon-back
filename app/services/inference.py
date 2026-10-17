@@ -142,18 +142,36 @@ class ValidatedObserver(ABC):
 
 
 def build_prefix_constraint(tokenizer_data, timestamps: list[float]):
+    return build_schema_constraint(tokenizer_data, observation_schema(timestamps))
+
+
+def build_schema_constraint(tokenizer_data, schema: dict):
     from lmformatenforcer import JsonSchemaParser
     from lmformatenforcer.integrations.transformers import (
         build_transformers_prefix_allowed_tokens_fn,
     )
 
     return build_transformers_prefix_allowed_tokens_fn(
-        tokenizer_data, JsonSchemaParser(observation_schema(timestamps))
+        tokenizer_data, JsonSchemaParser(schema)
     )
 
 
 class QwenObserver(ValidatedObserver):
     def _generate(self, frames: list[Frame], retry: bool, deadline: float) -> str:
+        return self.generate_structured(
+            frames, deadline, system_prompt=SYSTEM_PROMPT,
+            prompt=observation_prompt(
+                [f.timestamp_sec for f in frames], retry, include_system=False,
+                rule_guidance=self.rule_guidance,
+            ),
+            schema=None, token_limit=self.settings.max_new_tokens * (2 if retry else 1),
+            task="observation", retry=retry,
+        )
+
+    def generate_structured(
+        self, frames: list[Frame], deadline: float, *, system_prompt: str, prompt: str,
+        schema: dict | None, token_limit: int, task: str, retry: bool = False,
+    ) -> str:
         if time.monotonic() >= deadline:
             raise BudgetExceeded("Processing time budget exceeded; verdict unavailable")
         service = get_model(self.settings.model_dump_json())
@@ -170,10 +188,7 @@ class QwenObserver(ValidatedObserver):
         content = [
             {
                 "type": "text",
-                "text": observation_prompt(
-                    [f.timestamp_sec for f in frames], retry, include_system=False,
-                    rule_guidance=self.rule_guidance,
-                ),
+                "text": prompt,
             }
         ]
         for frame, image in zip(frames, images):
@@ -184,7 +199,7 @@ class QwenObserver(ValidatedObserver):
         # Native Qwen multi-image chat pathway; avoids assuming uniform video FPS for VFR inputs.
         text = service.processor.apply_chat_template(
             [
-                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "system", "content": system_prompt},
                 {"role": "user", "content": content},
             ],
             tokenize=False,
@@ -194,15 +209,15 @@ class QwenObserver(ValidatedObserver):
             text=[text], images=images, padding=True, return_tensors="pt"
         ).to(service.model.device)
         with torch.inference_mode():
-            # A retry may need more room to finish multiple observed actions.
-            # The same job deadline still bounds both attempts.
-            token_limit = self.settings.max_new_tokens * (2 if retry else 1)
             generated = service.model.generate(
                 **inputs,
                 do_sample=False,
                 max_new_tokens=token_limit,
-                prefix_allowed_tokens_fn=build_prefix_constraint(
-                    service.tokenizer_data, [f.timestamp_sec for f in frames]
+                prefix_allowed_tokens_fn=(
+                    build_schema_constraint(service.tokenizer_data, schema) if schema is not None
+                    else build_prefix_constraint(
+                        service.tokenizer_data, [f.timestamp_sec for f in frames]
+                    )
                 ),
                 stopping_criteria=StoppingCriteriaList([Deadline()]),
             )
@@ -225,6 +240,7 @@ class QwenObserver(ValidatedObserver):
         logger.info("model_generation_finished", extra={"metrics": {
             **self.generation_metrics,
             "retry": retry,
+            "task": task,
             "window_start_sec": frames[0].timestamp_sec,
             "window_end_sec": frames[-1].timestamp_sec,
         }})

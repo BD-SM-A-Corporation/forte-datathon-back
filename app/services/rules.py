@@ -1,3 +1,4 @@
+import hashlib
 import json
 import logging
 from datetime import date
@@ -57,6 +58,9 @@ class Rule(StrictModel):
 
 
 class Catalogue(StrictModel):
+    language: Literal["ru", "en"] = "ru"
+    translation_note: str = ""
+    translated_from_sha256: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
     rules: list[Rule]
 
     @model_validator(mode="after")
@@ -66,19 +70,22 @@ class Catalogue(StrictModel):
         return self
 
 
-class CatalogueResponse(Catalogue):
+class CatalogueResponse(StrictModel):
+    rules: list[Rule]
     configured: bool
     review_required: Literal[True] = True
 
 
 class RuleEngine:
-    def __init__(self, catalogue: Catalogue):
+    def __init__(self, catalogue: Catalogue, model_catalogue: Catalogue | None = None):
         self.catalogue = catalogue
+        self.model_catalogue = model_catalogue
 
     @classmethod
-    def load(cls, path: Path) -> "RuleEngine":
+    def load(cls, path: Path, *, model_path: Path | None = None) -> "RuleEngine":
         try:
-            raw = path.read_text(encoding="utf-8")
+            source_bytes = path.read_bytes()
+            raw = source_bytes.decode("utf-8")
         except OSError as exc:
             logger.error("Cannot read regulation catalogue %s: %s", path.absolute(), exc)
             raise ConfigurationError(
@@ -88,12 +95,45 @@ class RuleEngine:
             logger.error("Regulation catalogue %s is not UTF-8: %s", path.absolute(), exc)
             raise ConfigurationError("Regulation catalogue must be UTF-8 encoded") from exc
         try:
-            return cls(Catalogue.model_validate_json(raw))
+            catalogue = Catalogue.model_validate_json(raw)
         except ValueError as exc:
             logger.error("Invalid regulation catalogue %s: %s", path.absolute(), exc)
             raise ConfigurationError(
                 "Regulation catalogue is invalid; check logs for validation details"
             ) from exc
+        model_catalogue = None
+        if model_path is not None:
+            model_catalogue = cls.load(model_path).catalogue
+            if (
+                catalogue.language != "ru"
+                or model_catalogue.language != "en"
+                or not model_catalogue.translation_note
+                or model_catalogue.translated_from_sha256
+                != hashlib.sha256(source_bytes).hexdigest()
+            ):
+                raise ConfigurationError(
+                    "English rule translation is missing provenance or outdated; "
+                    "check MODEL_RULES_PATH against RULES_PATH"
+                )
+            original = {rule.id: rule for rule in catalogue.rules}
+            translated = {rule.id: rule for rule in model_catalogue.rules}
+            if original.keys() != translated.keys():
+                raise ConfigurationError("Russian and English rule IDs do not match")
+            for rule_id, rule in original.items():
+                counterpart = translated[rule_id]
+                if (
+                    rule.kind != counterpart.kind
+                    or rule.observable_event_types != counterpart.observable_event_types
+                    or rule.conditions != counterpart.conditions
+                    or rule.source.url != counterpart.source.url
+                    or rule.source.jurisdiction != counterpart.source.jurisdiction
+                    or rule.source.verified_on != counterpart.source.verified_on
+                    or not counterpart.observation_guidance
+                ):
+                    raise ConfigurationError(
+                        "Russian and English rule logic or source references do not match"
+                    )
+        return cls(catalogue, model_catalogue)
 
     @property
     def configured(self) -> bool:
@@ -109,7 +149,7 @@ class RuleEngine:
         """Give the observer visible action targets, not legal verdict instructions."""
         return "\n".join(
             f"- {', '.join(rule.observable_event_types)}: {rule.observation_guidance}"
-            for rule in self.catalogue.rules
+            for rule in (self.model_catalogue or self.catalogue).rules
             if rule.observation_guidance
         )
 

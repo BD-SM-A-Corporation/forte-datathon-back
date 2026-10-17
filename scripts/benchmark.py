@@ -10,6 +10,7 @@ from app.core.config import Settings
 from app.services.inference import MockObserver, create_observer
 from app.services.pipeline import Pipeline
 from app.services.rules import RuleEngine
+from app.services.verification import RuleVerifier
 
 
 def main() -> None:
@@ -21,13 +22,18 @@ def main() -> None:
     parser.add_argument("--repeat", type=int, default=1)
     args = parser.parse_args()
     settings = Settings()
-    rules = RuleEngine.load(settings.rules_path)
+    rules = RuleEngine.load(
+        settings.rules_path, model_path=None if args.mock else settings.model_rules_path
+    )
     observer = (
         MockObserver() if args.mock
         else create_observer(settings, rule_guidance=rules.observation_guidance())
     )
     # Mock benchmarking still requires a configured test/verified catalogue; never bypass verdict checks.
-    pipeline = Pipeline(settings, observer, rules)
+    pipeline = Pipeline(settings, observer, rules, verifier=(
+        RuleVerifier(settings, observer)
+        if not args.mock and settings.rule_verification_enabled else None
+    ))
     runs = []
     for index in range(args.repeat):
         start = time.monotonic()

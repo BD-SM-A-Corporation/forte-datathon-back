@@ -23,10 +23,19 @@ class DMRObserver(ValidatedObserver):
         self.transport = transport
 
     def _generate(self, frames: list[Frame], retry: bool, deadline: float) -> str:
-        content = [
-            {"type": "text", "text": observation_prompt(
+        return self.generate_structured(
+            frames, deadline, system_prompt="",
+            prompt=observation_prompt(
                 [f.timestamp_sec for f in frames], retry, rule_guidance=self.rule_guidance
-            )}
+            ), schema=None, token_limit=self.settings.max_new_tokens, task="observation", retry=retry,
+        )
+
+    def generate_structured(
+        self, frames: list[Frame], deadline: float, *, system_prompt: str, prompt: str,
+        schema: dict | None, token_limit: int, task: str, retry: bool = False,
+    ) -> str:
+        content = [
+            {"type": "text", "text": (system_prompt + "\n" if system_prompt else "") + prompt}
         ]
         for frame in frames:
             if time.monotonic() >= deadline:
@@ -54,7 +63,7 @@ class DMRObserver(ValidatedObserver):
             "messages": [{"role": "user", "content": content}],
             "stream": False,
             "temperature": 0,
-            "max_tokens": self.settings.max_new_tokens,
+            "max_tokens": token_limit,
             "response_format": {"type": "json_object"},
         }
         response = asyncio.run(self._request(payload, deadline))
