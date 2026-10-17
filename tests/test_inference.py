@@ -39,7 +39,12 @@ def test_retry_exhausted(frames, settings):
 
 
 def test_empty(frames, settings):
-    assert QwenObserver(settings, lambda *args: '{"events": []}').observe(frames, 99999) == []
+    assert (
+        QwenObserver(settings, lambda *args: '{"events": []}').observe(
+            frames, time.monotonic() + 30
+        )
+        == []
+    )
 
 
 @pytest.mark.parametrize(

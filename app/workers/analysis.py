@@ -7,7 +7,7 @@ from rq import SimpleWorker, get_current_job
 from app.core.config import Settings
 from app.core.errors import AnalysisError
 from app.core.logging import configure_logging
-from app.services.inference import QwenObserver
+from app.services.inference import create_observer
 from app.services.jobs import JobStore
 from app.services.pipeline import Pipeline
 from app.services.rules import RuleEngine
@@ -20,7 +20,9 @@ def get_pipeline() -> Pipeline:
     global _pipeline
     if _pipeline is None:
         settings = Settings()
-        _pipeline = Pipeline(settings, QwenObserver(settings), RuleEngine.load(settings.rules_path))
+        _pipeline = Pipeline(
+            settings, create_observer(settings), RuleEngine.load(settings.rules_path)
+        )
     return _pipeline
 
 
@@ -57,8 +59,8 @@ def main() -> None:
         settings.rules_path
     )  # Validate at process startup, including an empty catalogue.
     store = JobStore(settings)
-    # SimpleWorker is intentional: no per-job fork, so model/CUDA state persists across jobs.
-    # Run exactly ONE worker process per GPU. RQ's Unix signal timeout enforces the hard budget.
+    # SimpleWorker preserves local model/CUDA state. DMR owns its own model lifecycle.
+    # Use one local worker per GPU; size DMR concurrency to the server's capacity.
     SimpleWorker([store.queue], connection=store.connection).work()
 
 

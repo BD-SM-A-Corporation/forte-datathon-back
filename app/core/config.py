@@ -1,5 +1,6 @@
 from pathlib import Path
 from typing import Literal
+from urllib.parse import urlsplit
 
 from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -25,6 +26,10 @@ class Settings(BaseSettings):
     motion_merge_gap_sec: float = Field(1, ge=0)
     inference_max_side: int = Field(448, ge=56)
     roi: tuple[float, float, float, float] | None = None
+    inference_backend: Literal["local", "dmr"] = "local"
+    model_base_url: str = ""
+    model_name: str = ""
+    model_http_timeout_sec: float = Field(120, gt=0, allow_inf_nan=False)
     qwen_model_path: Path = Path("weights/Qwen2.5-VL-3B-Instruct")
     model_device: Literal["cpu", "cuda"] = "cpu"
     model_quantization: Literal["none", "4bit", "8bit"] = "none"
@@ -40,6 +45,23 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def consistent(self) -> "Settings":
+        self.model_base_url = self.model_base_url.strip().rstrip("/")
+        self.model_name = self.model_name.strip()
+        if self.inference_backend == "dmr":
+            url = urlsplit(self.model_base_url)
+            if (
+                url.scheme not in ("http", "https")
+                or not url.hostname
+                or url.username is not None
+                or url.password is not None
+                or url.query
+                or url.fragment
+            ):
+                raise ValueError("DMR requires MODEL_BASE_URL as an HTTP(S) API base URL")
+            # Accessing port also validates malformed and out-of-range port values.
+            _ = url.port
+            if not self.model_name:
+                raise ValueError("DMR requires MODEL_NAME identifying a prepared vision model")
         if self.window_overlap_sec >= self.window_duration_sec:
             raise ValueError("Window overlap must be shorter than window duration")
         if self.window_duration_sec * self.base_sample_fps + 1 > self.max_frames_per_window:

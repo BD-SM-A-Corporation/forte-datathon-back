@@ -1,4 +1,5 @@
 import json
+import logging
 from datetime import date
 from pathlib import Path
 from typing import Literal
@@ -8,6 +9,8 @@ from pydantic import Field, model_validator
 
 from app.core.errors import ConfigurationError
 from app.schemas.analysis import EventType, Observation, StrictModel
+
+logger = logging.getLogger(__name__)
 
 
 class Source(StrictModel):
@@ -69,9 +72,22 @@ class RuleEngine:
     @classmethod
     def load(cls, path: Path) -> "RuleEngine":
         try:
-            return cls(Catalogue.model_validate_json(path.read_text()))
-        except (OSError, ValueError) as exc:
-            raise ConfigurationError("Regulation catalogue missing or invalid") from exc
+            raw = path.read_text(encoding="utf-8")
+        except OSError as exc:
+            logger.error("Cannot read regulation catalogue %s: %s", path.absolute(), exc)
+            raise ConfigurationError(
+                "Regulation catalogue cannot be read; check RULES_PATH"
+            ) from exc
+        except UnicodeError as exc:
+            logger.error("Regulation catalogue %s is not UTF-8: %s", path.absolute(), exc)
+            raise ConfigurationError("Regulation catalogue must be UTF-8 encoded") from exc
+        try:
+            return cls(Catalogue.model_validate_json(raw))
+        except ValueError as exc:
+            logger.error("Invalid regulation catalogue %s: %s", path.absolute(), exc)
+            raise ConfigurationError(
+                "Regulation catalogue is invalid; check logs for validation details"
+            ) from exc
 
     @property
     def configured(self) -> bool:

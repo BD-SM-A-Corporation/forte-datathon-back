@@ -7,7 +7,7 @@ import time
 from pathlib import Path
 
 from app.core.config import Settings
-from app.services.inference import MockObserver, QwenObserver
+from app.services.inference import MockObserver, create_observer
 from app.services.pipeline import Pipeline
 from app.services.rules import RuleEngine
 
@@ -21,7 +21,7 @@ def main() -> None:
     parser.add_argument("--repeat", type=int, default=1)
     args = parser.parse_args()
     settings = Settings()
-    observer = MockObserver() if args.mock else QwenObserver(settings)
+    observer = MockObserver() if args.mock else create_observer(settings)
     rules = RuleEngine.load(settings.rules_path)
     # Mock benchmarking still requires a configured test/verified catalogue; never bypass verdict checks.
     pipeline = Pipeline(settings, observer, rules)
@@ -43,7 +43,11 @@ def main() -> None:
             {
                 "mock": args.mock,
                 "python": platform.python_version(),
-                "device": settings.model_device,
+                "backend": "mock" if args.mock else settings.inference_backend,
+                "model": settings.model_name
+                if settings.inference_backend == "dmr"
+                else str(settings.qwen_model_path),
+                "device": settings.model_device if settings.inference_backend == "local" else None,
                 "runs": runs,
             },
             indent=2,

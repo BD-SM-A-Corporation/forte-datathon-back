@@ -1,3 +1,5 @@
+import json
+
 import pytest
 from pydantic import ValidationError
 
@@ -25,16 +27,36 @@ def test_rule_file(rule_file):
 
 
 @pytest.mark.parametrize("raw", ['{"rules": [{}]}', "not json", '{"rules": [], "unknown": 1}'])
-def test_invalid_file(tmp_path, raw):
+def test_invalid_file(tmp_path, raw, caplog):
     path = tmp_path / "rules.json"
     path.write_text(raw)
-    with pytest.raises(ConfigurationError):
+    with pytest.raises(ConfigurationError, match="catalogue is invalid"):
         RuleEngine.load(path)
+    assert str(path) in caplog.text
 
 
-def test_missing_file(tmp_path):
-    with pytest.raises(ConfigurationError):
-        RuleEngine.load(tmp_path / "missing.json")
+def test_missing_file(tmp_path, caplog):
+    path = tmp_path / "missing.json"
+    with pytest.raises(ConfigurationError, match="cannot be read; check RULES_PATH"):
+        RuleEngine.load(path)
+    assert str(path) in caplog.text
+
+
+def test_invalid_encoding(tmp_path, caplog):
+    path = tmp_path / "rules.json"
+    path.write_bytes(b"\xff")
+    with pytest.raises(ConfigurationError, match="must be UTF-8 encoded"):
+        RuleEngine.load(path)
+    assert str(path) in caplog.text
+
+
+def test_schema_mismatch_logged(rule_file, catalogue_data, caplog):
+    catalogue_data["rules"][0]["conditions"]["unsupported_condition"] = True
+    rule_file.write_text(json.dumps(catalogue_data), encoding="utf-8")
+    with pytest.raises(ConfigurationError, match="catalogue is invalid"):
+        RuleEngine.load(rule_file)
+    assert "rules.0.conditions.unsupported_condition" in caplog.text
+    assert "Extra inputs are not permitted" in caplog.text
 
 
 def test_unknown_conditions_rejected(catalogue_data):

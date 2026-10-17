@@ -1,0 +1,22 @@
+# Compose 2.24.4+. Use with docker-compose.yml, without docker-compose.gpu.yml.
+# Prepare the model in Docker Model Runner before starting these services.
+x-dmr: &dmr
+  image: forte-analysis:dmr
+  build:
+    args:
+      INSTALL_MODEL: "false"
+  environment:
+    INFERENCE_BACKEND: dmr
+    MODEL_BASE_URL: ${MODEL_BASE_URL:-http://model-runner.docker.internal:12434/engines/v1}
+    MODEL_NAME: ${MODEL_NAME:?Set MODEL_NAME to a prepared DMR vision model}
+  extra_hosts:
+    - "model-runner.docker.internal:host-gateway"
+  volumes: !override
+    - uploads:/app/storage
+    - ./rules:/app/rules:ro
+
+services:
+  api:
+    <<: *dmr
+  worker:
+    <<: *dmr

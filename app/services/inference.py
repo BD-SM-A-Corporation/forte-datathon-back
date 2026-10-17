@@ -2,6 +2,7 @@ import itertools
 import json
 import logging
 import time
+from abc import ABC, abstractmethod
 from collections.abc import Callable
 from typing import Protocol
 
@@ -53,7 +54,9 @@ def parse_observations(raw: str, frames: list[Frame]) -> list[Observation]:
     return parsed.events
 
 
-class QwenObserver:
+class ValidatedObserver(ABC):
+    """Shared frame, deadline, and output contract for inference backends."""
+
     def __init__(
         self, settings: Settings, generate: Callable[[list[Frame], bool, float], str] | None = None
     ):
@@ -68,7 +71,11 @@ class QwenObserver:
         if any(b.timestamp_sec <= a.timestamp_sec for a, b in itertools.pairwise(frames)):
             raise InferenceError("Inference frames must be chronological")
         for attempt in range(self.settings.generation_retries + 1):
+            if time.monotonic() >= deadline:
+                raise BudgetExceeded("Processing time budget exceeded; verdict unavailable")
             raw = self.generate(frames, attempt > 0, deadline)
+            if time.monotonic() >= deadline:
+                raise BudgetExceeded("Processing time budget exceeded; verdict unavailable")
             try:
                 return parse_observations(raw, frames)
             except (ValueError, ValidationError, TypeError) as exc:
@@ -79,6 +86,12 @@ class QwenObserver:
                     ) from exc
         raise AssertionError("unreachable")
 
+    @abstractmethod
+    def _generate(self, frames: list[Frame], retry: bool, deadline: float) -> str:
+        raise NotImplementedError
+
+
+class QwenObserver(ValidatedObserver):
     def _generate(self, frames: list[Frame], retry: bool, deadline: float) -> str:
         if time.monotonic() >= deadline:
             raise BudgetExceeded("Processing time budget exceeded; verdict unavailable")
@@ -122,6 +135,14 @@ class QwenObserver:
             skip_special_tokens=True,
             clean_up_tokenization_spaces=False,
         )[0]
+
+
+def create_observer(settings: Settings) -> Observer:
+    if settings.inference_backend == "dmr":
+        from app.services.dmr import DMRObserver
+
+        return DMRObserver(settings)
+    return QwenObserver(settings)
 
 
 class MockObserver:

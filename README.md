@@ -1,7 +1,8 @@
 # Forte Datathon — offline video analysis backend
 
-A zero-shot CCTV observation engine using **Qwen/Qwen2.5-VL-3B-Instruct**, OpenCV,
-FFmpeg, FastAPI, and Redis/RQ. It describes visible actions, then matches those
+A zero-shot CCTV observation engine using local **Qwen/Qwen2.5-VL-3B-Instruct**
+or a vision model served by **Docker Model Runner (DMR)**, OpenCV, FFmpeg, FastAPI,
+and Redis/RQ. It describes visible actions, then matches those
 observations against a locally maintained catalogue of verified Kazakhstan rules.
 It does not identify people or infer invisible transactions, intent, or authorization.
 
@@ -15,11 +16,13 @@ its unused SQLite models. No migration is required for the new Redis job store.
 ```text
 Next.js → POST /api/v1/analyze → shared upload storage + Redis/RQ
                                        ↓
-                         one persistent worker per GPU
+                             persistent RQ worker
                                        ↓
 FFprobe PTS → OpenCV decoding → baseline samples + motion candidates
                                        ↓
-              timestamped Qwen multi-image windows (local weights)
+                     timestamped multi-image windows
+                                       ↓
+               local Qwen / HTTP → Docker Model Runner
                                        ↓
              optional denser windows → validated observations
                                        ↓
@@ -30,9 +33,11 @@ FFprobe PTS → OpenCV decoding → baseline samples + motion candidates
                          GET /api/v1/jobs/{job_id}
 ```
 
-All inference is local. Dependency and checkpoint downloads are separate setup
-operations. Neither video processing nor rule matching makes network requests.
-Redis is a local deployment service, not an external inference service.
+The default `INFERENCE_BACKEND=local` runs Qwen inside the worker. With
+`INFERENCE_BACKEND=dmr`, the worker sends sampled JPEG frames and prompts to the
+configured model server over HTTP. Keep DMR on your deployment host/network for
+local inference. Dependency, model, and inference-engine downloads are setup
+operations; prepare them before offline use. Rule matching uses local files.
 
 The default catalogue now contains conservative checks for paragraphs **20 and 22**
 and non-violation context for paragraph **32** of National Bank Resolution No. 231
@@ -52,7 +57,7 @@ An empty catalogue (or one containing only context entries) still fails explicit
 | P22 departure | Established counter operator and participant roles, actual operator departure, positive signs of interrupted cash service, participant remaining | Empty chair, waiting person, occlusion, or merely no evidence that service ended |
 | P32 packaging | Context for reviewing a banknote package handover | No visible counting; this never creates a violation by itself |
 
-Qwen returns positive `facts` with supporting supplied-frame timestamps and material
+The vision model returns positive `facts` with supporting supplied-frame timestamps and material
 `uncertainties`. Missing facts mean unknown. Every required fact must be supported
 within one analyzed window, with no material uncertainty and confidence at least
 0.8. This threshold is an engineering filter, not calibrated legal certainty. Cross-window
@@ -75,6 +80,14 @@ docker compose up -d --build api worker
 docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d --build api worker
 ```
 
+Compose mounts `./rules` into both containers, while application code is baked into
+the image. Updating the catalogue can therefore expose new fields to an older rule
+schema. If startup reports rejected fields such as `kind`, `facts_all`, or
+`require_no_uncertainties`, rebuild and recreate **both** services using the command
+above; restarting existing containers does not update their code. Catalogue load
+errors distinguish unreadable files from invalid content, with the path and details
+in the logs. Image builds also validate the bundled catalogue as the runtime user.
+
 ## Installation and local development
 
 Requires Python 3.11–3.13, FFmpeg/ffprobe on PATH, and Redis 7.
@@ -85,22 +98,22 @@ source .venv/bin/activate
 pip install -e '.[test]'
 cp .env.example .env
 # Set API_KEY to a freshly generated secret, e.g. python -c 'import secrets; print(secrets.token_hex(32))'
-# Review the bundled rule scope; stage the local checkpoint before running inference.
+# Review the bundled rule scope; stage the local checkpoint or configure DMR below.
 docker compose up -d redis
 uvicorn app.main:app --host 0.0.0.0 --port 8000
 # In another terminal, using the same environment and working directory:
-pip install -e '.[model]'
+pip install -e '.[model]'  # Local backend only; DMR needs just the base installation.
 python -m app.workers.analysis
 ```
 
 The API requires a nonempty `API_KEY` at startup. `/health` checks Redis and reports
 whether rules are configured; it does not promise GPU/model readiness. Swagger is
-at `/docs`. Queue startup is independent of model initialization. The model loads
-lazily on the first configured, valid job. One `SimpleWorker` process handles jobs
-sequentially and keeps the model resident; the default forking RQ worker would
-reload weights for every job and must not be substituted.
+at `/docs`. Queue startup is independent of model initialization and DMR readiness.
+One `SimpleWorker` process handles jobs sequentially. For the local backend, it
+loads the model lazily and retains it across jobs; a forking worker would reload
+weights. DMR manages model loading and residency in its own inference engine.
 
-## Download the checkpoint in advance
+## Local backend: download the checkpoint in advance
 
 On an internet-connected setup machine:
 
@@ -125,6 +138,86 @@ The native video-tensor path is not enabled because a single FPS would not prese
 arbitrary VFR spacing. Real-checkpoint compatibility must be confirmed with the
 smoke test below before deployment; no model execution is implied by mocked tests.
 
+## Docker Model Runner backend
+
+Enable or install DMR following the [Docker setup guide](https://docs.docker.com/ai/model-runner/get-started/).
+Choose a **vision model that supports multiple images per request**, prepare it in
+DMR, and use its full reference (namespace/name and preferably a pinned tag).
+No default DMR model is assumed. The existing Qwen Hugging Face directory is not
+automatically served by DMR: choose a supported engine and package/convert it as
+needed. llama.cpp uses GGUF with a matching multimodal projector where required;
+vLLM uses Safetensors. See [engines](https://docs.docker.com/ai/model-runner/inference-engines/)
+and [model packaging](https://docs.docker.com/reference/cli/docker/model/package/).
+
+After selecting an actual vision model reference, set it in your shell:
+
+```bash
+export MODEL_NAME='your-namespace/your-vision-model:tag'  # Replace with your real model.
+docker model pull "$MODEL_NAME"
+docker model list
+```
+
+Prepare the runner engine and model before going offline. Confirm image support
+with the opt-in smoke test below; listing a model alone does not prove compatibility.
+
+For a worker running directly on the host, set these in `.env`:
+
+```dotenv
+INFERENCE_BACKEND=dmr
+MODEL_BASE_URL=http://localhost:12434/engines/v1
+MODEL_NAME=your-namespace/your-vision-model:tag
+MODEL_HTTP_TIMEOUT_SEC=120
+```
+
+`MODEL_BASE_URL` is the API base; the adapter appends `/chat/completions`. Docker
+Desktop requires host TCP access enabled for host processes. DMR requires no API
+key; the application's `API_KEY` still protects uploads and results. Endpoint details
+are in the [DMR API reference](https://docs.docker.com/ai/model-runner/api-reference/).
+
+For Docker Engine containers, use the DMR override (Compose **2.24.4+**):
+
+```bash
+# In .env, set MODEL_NAME to the prepared vision model and API_KEY to your API secret.
+# Use this container URL instead of localhost, or leave MODEL_BASE_URL unset:
+export MODEL_BASE_URL=http://model-runner.docker.internal:12434/engines/v1
+docker compose -f docker-compose.yml -f docker-compose.dmr.yml up -d --build
+```
+
+The override selects `dmr`, builds `forte-analysis:dmr` with `INSTALL_MODEL=false`,
+and removes the weights mount. It maps `model-runner.docker.internal` to the host
+gateway. DMR must be running and reachable there. For Docker Desktop, set
+`MODEL_BASE_URL=http://host.docker.internal:12434/engines/v1` and enable host TCP
+access; this uses Desktop's host address independently of the Engine gateway mapping.
+Do not combine the DMR override with `docker-compose.gpu.yml`: GPU access and
+quantization belong to the runner, not the API or worker. Size worker concurrency
+to the model server's capacity. The override connects to an existing runner;
+it does not install DMR or pull models during application startup.
+
+The adapter sends the observation prompt followed by alternating timestamp text
+and JPEG data URLs. It requests JSON with `temperature=0` and a bounded output
+length. Both backends validate the same observation schema and supplied timestamps.
+Malformed observation JSON gets `GENERATION_RETRIES` attempts after the first call;
+HTTP failures, malformed response envelopes, and incomplete completions fail the
+job without generating a verdict or switching backends.
+
+The total HTTP request timeout is the smaller of `MODEL_HTTP_TIMEOUT_SEC` and the
+remaining job budget, including connection and response transfer. Retries share
+that job budget. Client cancellation does not guarantee server-side generation
+has stopped. Model loading and server queue time also consume the request budget.
+
+Check the prepared model from the host with base/test dependencies installed:
+
+```bash
+MODEL_BASE_URL=http://localhost:12434/engines/v1 \
+  RUN_DMR_MODEL_TEST=1 pytest -q tests/test_model_integration.py -k dmr
+```
+
+This sends two blank timestamped images through the actual adapter and expects no
+events. It checks the multi-image request and response contract, not visual accuracy.
+For troubleshooting, use `docker model logs` and check the model name, image support,
+context capacity (prompt plus all images and output), and endpoint reachability.
+Raise token/context limits deliberately if the server reports truncation or overflow.
+
 ## Configuration
 
 All settings use environment variables or `.env`; `.env.example` lists defaults.
@@ -143,12 +236,15 @@ All settings use environment variables or `.env`; `.env.example` lists defaults.
 | `MOTION_PIXEL_THRESHOLD` | Minimum grayscale pixel difference, default 25/255 |
 | `MOTION_MERGE_GAP_SEC` | Merge nearby motion intervals, default 1 second |
 | `INFERENCE_MAX_SIDE`, `ROI` | Resize longest side to 448; optional normalized crop `[left,top,right,bottom]` |
-| `QWEN_MODEL_PATH`, `MODEL_DEVICE` | Existing local checkpoint; `cpu` or `cuda` |
-| `MODEL_QUANTIZATION` | `none`, `4bit`, or `8bit`; quantization requires CUDA in this implementation |
+| `INFERENCE_BACKEND` | `local` (default) or `dmr` |
+| `MODEL_BASE_URL`, `MODEL_NAME` | Required for DMR: HTTP(S) API base and full vision-model reference |
+| `MODEL_HTTP_TIMEOUT_SEC` | DMR total request timeout, default 120 seconds; capped by remaining job budget |
+| `QWEN_MODEL_PATH`, `MODEL_DEVICE` | Local backend only: existing checkpoint; `cpu` or `cuda` |
+| `MODEL_QUANTIZATION` | Local backend only: `none`, `4bit`, or `8bit`; quantization requires CUDA |
 | `MAX_NEW_TOKENS`, `MAX_FRAMES_PER_WINDOW` | Generation cap 512; input cap 12 |
 | `GENERATION_RETRIES` | Retry malformed JSON once by default, max 2 |
 | `MAX_REFINEMENT_WINDOWS` | Bound additional inspection, default 8 |
-| `PROCESSING_BUDGET_SEC` | Default 300-second worker timeout, also checked between stages and generated tokens |
+| `PROCESSING_BUDGET_SEC` | Default 300-second worker timeout; bounds stages, local generation, and DMR requests/retries |
 | `QUEUE_TTL_SEC`, `RESULT_TTL_SEC` | Queue expiry 3600 seconds; result/failure retention 86400 seconds |
 | `EVENT_MERGE_GAP_SEC` | Duplicate-event gap tolerance, default 0.2 seconds |
 
@@ -285,17 +381,18 @@ bind mounts. Redis persists to its own volume and binds its host port only to lo
 restart automatically. Worker health allows an entire processing budget between
 heartbeats because SimpleWorker does not heartbeat during a job.
 
-For CPU-only infrastructure development, build with `INSTALL_MODEL=false`; this
-supports API/queue/tests, but configured inference jobs require the model extra.
+For CPU-only infrastructure development or DMR, build with `INSTALL_MODEL=false`.
+This supports API/queue/tests and DMR inference; local Qwen requires the model extra.
 There is no runtime mock switch on the production API. Tests explicitly inject a
 mock observer. On Coolify, use the same Compose services, shared volume, mounted
-model/rule directories, environment values, and GPU reservation. Route the API
+model/rule directories, environment values, and GPU reservation for local Qwen.
+For DMR use the DMR override and a reachable prepared runner. Route the API
 through your deployment proxy, which should also enforce the upload body limit.
-Do not scale multiple workers onto the same GPU.
+For local Qwen, do not scale multiple workers onto the same GPU.
 
 ## GPU requirements and limitations
 
-The 3B model can run with CUDA FP16/BF16 or bitsandbytes 4/8-bit quantization.
+With the local backend, the 3B model can run with CUDA FP16/BF16 or bitsandbytes 4/8-bit quantization.
 Choose an NVIDIA GPU with enough VRAM for weights **and** multi-image activations;
 8–12 GB is a starting planning range for quantized, reduced-resolution experiments,
 not a measured guarantee. CPU float32 is available for development but is likely
@@ -304,6 +401,7 @@ memory and latency. Quantization support depends on the installed CUDA/PyTorch/
 bitsandbytes combination and must be tested on the deployment host.
 
 This MVP uses a cooperative per-stage/token deadline plus RQ's Unix signal timeout.
+DMR adds a total HTTP request timeout; server resource limits are managed by DMR.
 A blocking native GPU operation can delay signal handling; the timeout is not a
 hard real-time guarantee. Cold model loading counts against the job budget. For
 long-running deployments, benchmark both cold and warm runs.
@@ -316,6 +414,8 @@ pytest -q
 ruff check app tests scripts
 # Optional real local-checkpoint smoke test (no downloads):
 RUN_LOCAL_MODEL_TEST=1 pytest -q tests/test_model_integration.py
+# Optional real DMR multi-image smoke test (prepare model and set MODEL_NAME first):
+MODEL_BASE_URL=http://localhost:12434/engines/v1 RUN_DMR_MODEL_TEST=1 pytest -q tests/test_model_integration.py -k dmr
 # Real model benchmark after configuring verified rules and staging weights:
 python -m scripts.benchmark recording.mov --repeat 3 > benchmark.json
 # Mock timing, requires an explicitly supplied test catalogue; no model accuracy claim:
@@ -325,10 +425,13 @@ RULES_PATH=/path/to/your/test-catalogue.json python -m scripts.benchmark recordi
 Tests generate real MOVs locally, including VFR input, and validate OpenCV/FFmpeg
 processing. Inference tests mock generated text; end-to-end tests use a deterministic
 observer and fakeredis with a real RQ SimpleWorker. They require no model weights,
-CUDA, or internet. The opt-in local-model smoke test exercises the actual processor,
-model generation, and output validation and skips by default.
+CUDA, or internet. DMR adapter tests use a mock HTTP transport and cover image order,
+JSON validation/retries, failure handling, and deadlines. The local-model and DMR
+smoke tests exercise real inference and skip by default.
 
-Benchmark all supplied 10–145 second recordings; retain checkpoint SHA, GPU/driver,
+The benchmark uses the selected backend and reports its model identifier. For DMR,
+processing time includes model-server requests; `device` is null because the runner
+owns device selection. Benchmark all supplied 10–145 second recordings; retain checkpoint SHA, GPU/driver,
 Python/package versions, quantization, frame settings, cold/warm timing, errors,
 and peak VRAM (`nvidia-smi`). The tool reports per-run wall time and the 300-second
 comparison, excluding upload/network/queue wait. Measure submission-to-result time
