@@ -1,6 +1,7 @@
 x-backend: &backend
   build:
     context: .
+    target: backend
     args:
       INSTALL_MODEL: ${INSTALL_MODEL:-true}
   image: forte-analysis:local
@@ -15,13 +16,29 @@ x-backend: &backend
     TRANSFORMERS_OFFLINE: "1"
   volumes:
     - uploads:/app/storage
-    - ./weights:/models:ro
+    - ${MODEL_WEIGHTS_DIR:-./weights}:/models:ro
     - ./rules:/app/rules:ro
   depends_on:
     redis:
       condition: service_healthy
 
 services:
+  model-init:
+    build:
+      context: .
+      target: model-init
+    image: forte-model-init:local
+    restart: "no"
+    environment:
+      QWEN_MODEL_PATH: /models/Qwen2.5-VL-3B-Instruct
+      QWEN_MODEL_REVISION: ${QWEN_MODEL_REVISION:-66285546d2b821cf421d4f5eb2576359d3770cd3}
+      MODEL_INIT_OFFLINE: ${MODEL_INIT_OFFLINE:-0}
+      HF_HUB_OFFLINE: "0"
+      TRANSFORMERS_OFFLINE: "0"
+      HF_HOME: /models/.hf-cache
+      HF_HUB_DISABLE_IMPLICIT_TOKEN: "1"
+    volumes:
+      - ${MODEL_WEIGHTS_DIR:-./weights}:/models
   api:
     <<: *backend
     ports:
@@ -34,6 +51,11 @@ services:
   worker:
     <<: *backend
     command: [python, -m, app.workers.analysis]
+    depends_on:
+      redis:
+        condition: service_healthy
+      model-init:
+        condition: service_completed_successfully
     stop_grace_period: 310s
     healthcheck:
       test: [CMD, python, -m, app.workers.health]
