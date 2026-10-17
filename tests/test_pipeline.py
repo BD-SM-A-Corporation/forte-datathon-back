@@ -12,6 +12,10 @@ def test_full_pipeline(video, settings, rules, event):
     assert result.result.verdict == "violation"
     assert len(result.result.violations) == 1
     assert len(result.result.violations[0].evidence_frames) == 2
+    assert result.result.violations[0].confidence == event.confidence
+    assert result.result.assessment.status == "potential_violation"
+    assert result.result.assessment.review_required is True
+    assert result.result.assessment.decision_status == "pending_human_review"
     assert result.details["matches"][0]["rule"]["id"] == "TEST_ONLY"
     assert result.details["metrics"]["baseline_frames"] == 4
     assert observer.calls > 1
@@ -19,7 +23,12 @@ def test_full_pipeline(video, settings, rules, event):
 
 def test_no_events(video, settings, rules):
     result = Pipeline(settings, MockObserver(), rules).run(video)
-    assert result.result.model_dump() == {"verdict": "no_violation", "violations": []}
+    assert result.result.verdict == "no_violation"
+    assert result.result.violations == []
+    assert result.result.assessment.status == "no_supported_match"
+    assert result.result.assessment.review_required is True
+    assert result.result.assessment.decision_status == "pending_human_review"
+    assert result.details["review_required"] is True
 
 
 def test_unconfigured_fails(video, settings):

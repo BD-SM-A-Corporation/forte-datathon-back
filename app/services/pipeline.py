@@ -152,11 +152,14 @@ class Pipeline:
                 timecode_sec=event.start_sec,
                 description=f"{event.description} Potential rule match: {rule.explanation_template}",
                 evidence_frames=[evidence[t] for t in event.evidence_timestamps],
+                confidence=event.confidence,
+                uncertainties=event.uncertainties,
             )
             for event, rule in matches
         ]
         check()
         elapsed = time.monotonic() - started
+        result = Result(verdict="violation" if violations else "no_violation", violations=violations)
         details = {
             "observations": [e.model_dump() for e in events],
             "matches": [
@@ -169,8 +172,8 @@ class Pipeline:
                 for rule in self.rules.context(event)
             ],
             "regulatory_assessment": "potential_matches" if matches else "no_supported_match",
-            "review_required": bool(matches)
-            or any(self.rules.needs_review(event) for event in events),
+            "review_required": True,
+            "assessment": result.assessment.model_dump(),
             "motion_intervals": [asdict(i) for i in motion_intervals],
             "metrics": {
                 "processing_sec": elapsed,
@@ -182,7 +185,4 @@ class Pipeline:
             "scope": "No-match verdicts apply only to the configured rules and sampled visible actions.",
         }
         logger.info("analysis_complete", extra={"metrics": details["metrics"]})
-        return PipelineResult(
-            Result(verdict="violation" if violations else "no_violation", violations=violations),
-            details,
-        )
+        return PipelineResult(result, details)

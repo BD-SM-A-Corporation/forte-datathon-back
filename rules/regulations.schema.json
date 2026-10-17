@@ -86,6 +86,12 @@
           "minLength": 1,
           "title": "Explanation Template",
           "type": "string"
+        },
+        "observation_guidance": {
+          "default": "",
+          "maxLength": 700,
+          "title": "Observation Guidance",
+          "type": "string"
         }
       },
       "required": [

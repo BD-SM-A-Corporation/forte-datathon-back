@@ -4,6 +4,11 @@ from app.schemas.analysis import Observations
 
 SYSTEM_PROMPT = """You describe visible actions in CCTV frames, not violations.
 Examine ALL frames in chronological order. Describe only visually observable actions.
+Prioritize movements of the operator and counterparty, their hands, transferred
+objects, standing up and leaving. Track who acts and what changes before and after.
+Use person_entering only for a visible entry, not for someone already seated.
+Keep each event description to 1-2 short sentences, at most 240 characters.
+Keep each uncertainty note within 120 characters. Avoid speculation and repetition.
 Do not identify people, recognize faces, infer intentions, authorization, ownership,
 invisible transactions, or employment status. You may describe an anonymous counter
 operator and counterparty only when their positions AND visible service interaction
@@ -45,6 +50,8 @@ prior_receipt_completed_visible: the earlier receipt's end and subsequent separa
 interaction are visible; current handling or an unseen transaction is insufficient.
 prior_cash_remains_on_open_surface: the same earlier received banknotes visibly
 remain on an open surface during that separate interaction, not the active cash.
+clothing_pocket_storage_visible: the same previously received banknotes visibly
+enter a clothing pocket of the operator. A hand below the desk or occlusion is insufficient.
 operator_departure_visible: actual movement away from the workstation is visible.
 service_visibly_incomplete_at_departure: positive visual action shows that same cash
 service is interrupted mid-action by departure, not merely a person waiting.
@@ -70,6 +77,10 @@ def observation_schema(timestamps: list[float]) -> dict:
         raise ValueError("Observation schema requires sampled frames")
     schema = Observations.model_json_schema()
     properties = schema["$defs"]["Observation"]["properties"]
+    # Generation needs a compact contract to fit the token budget. Keep the
+    # storage/API model permissive enough to read observations from older workers.
+    properties["description"]["maxLength"] = 240
+    properties["uncertainties"]["items"]["maxLength"] = 120
     timestamp = {"type": "number", "enum": list(dict.fromkeys(timestamps))}
     for name in ("start_sec", "end_sec"):
         properties[name].update(timestamp)
@@ -84,7 +95,8 @@ def observation_schema(timestamps: list[float]) -> dict:
 
 
 def observation_prompt(
-    timestamps: list[float], retry: bool = False, *, include_system: bool = True
+    timestamps: list[float], retry: bool = False, *, include_system: bool = True,
+    rule_guidance: str = "",
 ) -> str:
     return (
         (SYSTEM_PROMPT + "\n" if include_system else "")
@@ -92,10 +104,17 @@ def observation_prompt(
         + json.dumps(timestamps)
         + '\nReturn observations only for visible actions in the following frames. '
         + 'If there are no visible actions, return {"events": []}.'
+        + (
+            "\nObservation targets from the configured registry (report actions, not violations):\n"
+            + rule_guidance
+            if rule_guidance else ""
+        )
         + "\nJSON schema: "
         + json.dumps(observation_schema(timestamps))
         + (
-            "\nPrevious response failed validation. Return complete valid JSON; check every field."
+            "\nPrevious response failed validation. Return complete valid JSON; check every field. "
+            "Use short descriptions and uncertainty notes without repetition. "
+            "Preserve the observed actions and supporting facts."
             if retry
             else ""
         )

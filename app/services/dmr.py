@@ -24,7 +24,9 @@ class DMRObserver(ValidatedObserver):
 
     def _generate(self, frames: list[Frame], retry: bool, deadline: float) -> str:
         content = [
-            {"type": "text", "text": observation_prompt([f.timestamp_sec for f in frames], retry)}
+            {"type": "text", "text": observation_prompt(
+                [f.timestamp_sec for f in frames], retry, rule_guidance=self.rule_guidance
+            )}
         ]
         for frame in frames:
             if time.monotonic() >= deadline:

@@ -53,6 +53,7 @@ class Rule(StrictModel):
     conditions: Conditions
     applicability: str = Field(min_length=1)
     explanation_template: str = Field(min_length=1)
+    observation_guidance: str = Field(default="", max_length=700)
 
 
 class Catalogue(StrictModel):
@@ -63,6 +64,11 @@ class Catalogue(StrictModel):
         if len({r.id for r in self.rules}) != len(self.rules):
             raise ValueError("Duplicate rule IDs")
         return self
+
+
+class CatalogueResponse(Catalogue):
+    configured: bool
+    review_required: Literal[True] = True
 
 
 class RuleEngine:
@@ -98,6 +104,14 @@ class RuleEngine:
             raise ConfigurationError(
                 "Verified regulations are not configured; regulatory verdict unavailable"
             )
+
+    def observation_guidance(self) -> str:
+        """Give the observer visible action targets, not legal verdict instructions."""
+        return "\n".join(
+            f"- {', '.join(rule.observable_event_types)}: {rule.observation_guidance}"
+            for rule in self.catalogue.rules
+            if rule.observation_guidance
+        )
 
     def match(self, event: Observation) -> list[Rule]:
         self.require_configured()

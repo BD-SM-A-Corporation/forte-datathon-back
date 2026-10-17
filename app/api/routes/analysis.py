@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, File, Header, HTTPException, Request, Up
 from starlette.concurrency import run_in_threadpool
 
 from app.schemas.analysis import AnalyzeResponse, JobResponse
+from app.services.rules import CatalogueResponse
 
 router = APIRouter(prefix="/api/v1")
 
@@ -16,6 +17,12 @@ async def authenticate(request: Request, x_api_key: str | None = Header(None)) -
     expected = request.app.state.settings.api_key
     if not expected or not x_api_key or not secrets.compare_digest(x_api_key, expected):
         raise HTTPException(401, "Missing or invalid X-API-Key")
+
+
+@router.get("/rules", response_model=CatalogueResponse, dependencies=[Depends(authenticate)])
+async def rule_catalogue(request: Request) -> CatalogueResponse:
+    engine = request.app.state.rules
+    return CatalogueResponse(rules=engine.catalogue.rules, configured=engine.configured)
 
 
 @router.post("/analyze", response_model=AnalyzeResponse, dependencies=[Depends(authenticate)])

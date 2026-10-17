@@ -42,7 +42,13 @@ def test_upload_and_result(api, video):
     data = client.get(url, headers={"X-API-Key": "test-key"}).json()
     assert data["status"] == "done", data
     assert data["verdict"] == "violation"
-    assert set(data["violations"][0]) == {"type", "timecode_sec", "description", "evidence_frames"}
+    assert data["violations"][0]["confidence"] == 0.8
+    assert data["violations"][0]["confidence_kind"] == "self_reported_observation"
+    assert data["assessment"] == {
+        "status": "potential_violation",
+        "review_required": True,
+        "decision_status": "pending_human_review",
+    }
     assert data["violations"][0]["evidence_frames"][0]["image_base64"].startswith("/9j/")
     details = client.get(url + "/details", headers={"X-API-Key": "test-key"}).json()
     assert details["details"]["matches"][0]["rule"]["id"] == "TEST_ONLY"
@@ -92,6 +98,7 @@ def test_corruption(api):
     ).json()
     assert data["status"] == "failed"
     assert "verdict" not in data
+    assert "assessment" not in data
     assert "Traceback" not in data["error"]
 
 
@@ -136,6 +143,27 @@ def test_failed_job(api):
 
 def test_health(api):
     assert api[0].get("/health").json() == {"status": "ok", "regulations_configured": True}
+
+
+def test_live_catalogue_requires_auth_and_returns_loaded_rules(api):
+    client, _, _ = api
+    assert client.get("/api/v1/rules").status_code == 401
+    response = client.get("/api/v1/rules", headers={"X-API-Key": "test-key"})
+    assert response.status_code == 200
+    data = response.json()
+    assert data["configured"] is True
+    assert data["review_required"] is True
+    assert data["rules"][0]["id"] == "TEST_ONLY"
+    assert data["rules"][0]["source"]["url"]
+
+
+def test_empty_catalogue_is_reported_truthfully(api):
+    from app.services.rules import Catalogue, RuleEngine
+
+    client, _, _ = api
+    client.app.state.rules = RuleEngine(Catalogue(rules=[]))
+    data = client.get("/api/v1/rules", headers={"X-API-Key": "test-key"}).json()
+    assert data == {"rules": [], "configured": False, "review_required": True}
 
 
 def test_queue_failure_cleanup(api, monkeypatch):

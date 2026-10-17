@@ -3,6 +3,7 @@ import json
 import pytest
 from lmformatenforcer import JsonSchemaParser
 
+from app.schemas.analysis import Observations
 from app.services.prompts import observation_schema
 
 
@@ -58,3 +59,13 @@ def test_preserves_fractional_frame_times(output):
 def test_rejects_incomplete_json_and_missing_required_fields():
     assert not accepts('{"events": [', [4.0, 9.0])
     assert not accepts('{"events": [{}]}', [4.0, 9.0])
+
+
+@pytest.mark.parametrize("field,limit", [("description", 240), ("uncertainties", 120)])
+def test_generation_blocks_verbose_text_but_preserves_stored_observations(output, field, limit):
+    event = output["events"][0]
+    event[field] = "x" * limit if field == "description" else ["x" * limit]
+    assert accepts(json.dumps(output), [4.0, 9.0])
+    event[field] = "x" * (limit + 1) if field == "description" else ["x" * (limit + 1)]
+    assert not accepts(json.dumps(output), [4.0, 9.0])
+    assert Observations.model_validate(output).events

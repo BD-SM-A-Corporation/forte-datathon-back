@@ -91,6 +91,8 @@ class ValidatedObserver(ABC):
     ):
         self.settings = settings
         self.generate = generate or self._generate
+        self.rule_guidance = ""
+        self.generation_metrics: dict = {}
 
     def observe(self, frames: list[Frame], deadline: float) -> list[Observation]:
         if not frames:
@@ -102,6 +104,7 @@ class ValidatedObserver(ABC):
         for attempt in range(self.settings.generation_retries + 1):
             if time.monotonic() >= deadline:
                 raise BudgetExceeded("Processing time budget exceeded; verdict unavailable")
+            self.generation_metrics = {}
             raw = self.generate(frames, attempt > 0, deadline)
             if time.monotonic() >= deadline:
                 raise BudgetExceeded("Processing time budget exceeded; verdict unavailable")
@@ -109,6 +112,11 @@ class ValidatedObserver(ABC):
                 return parse_observations(raw, frames)
             except (ValueError, ValidationError, TypeError) as exc:
                 diagnostic = validation_diagnostics(exc)
+                if (
+                    diagnostic["reason"] == "invalid_json"
+                    and self.generation_metrics.get("finish_reason") == "length"
+                ):
+                    diagnostic["reason"] = "output_token_limit"
                 logger.warning(
                     "invalid_model_output",
                     extra={"metrics": {
@@ -117,6 +125,7 @@ class ValidatedObserver(ABC):
                         "window_start_sec": frames[0].timestamp_sec,
                         "window_end_sec": frames[-1].timestamp_sec,
                         "output_chars": len(raw),
+                        **self.generation_metrics,
                         **diagnostic,
                     }},
                 )
@@ -162,7 +171,8 @@ class QwenObserver(ValidatedObserver):
             {
                 "type": "text",
                 "text": observation_prompt(
-                    [f.timestamp_sec for f in frames], retry, include_system=False
+                    [f.timestamp_sec for f in frames], retry, include_system=False,
+                    rule_guidance=self.rule_guidance,
                 ),
             }
         ]
@@ -184,15 +194,40 @@ class QwenObserver(ValidatedObserver):
             text=[text], images=images, padding=True, return_tensors="pt"
         ).to(service.model.device)
         with torch.inference_mode():
+            # A retry may need more room to finish multiple observed actions.
+            # The same job deadline still bounds both attempts.
+            token_limit = self.settings.max_new_tokens * (2 if retry else 1)
             generated = service.model.generate(
                 **inputs,
                 do_sample=False,
-                max_new_tokens=self.settings.max_new_tokens,
+                max_new_tokens=token_limit,
                 prefix_allowed_tokens_fn=build_prefix_constraint(
                     service.tokenizer_data, [f.timestamp_sec for f in frames]
                 ),
                 stopping_criteria=StoppingCriteriaList([Deadline()]),
             )
+        output_tokens = generated.shape[1] - inputs.input_ids.shape[1]
+        eos_ids = getattr(getattr(service.model, "generation_config", None), "eos_token_id", [])
+        eos_ids = [eos_ids] if isinstance(eos_ids, int) else (eos_ids or [])
+        if time.monotonic() >= deadline:
+            finish_reason = "deadline"
+        elif output_tokens and generated[0, -1].item() in eos_ids:
+            finish_reason = "eos"
+        elif output_tokens >= token_limit:
+            finish_reason = "length"
+        else:
+            finish_reason = "stopped"
+        self.generation_metrics = {
+            "output_tokens": output_tokens,
+            "token_limit": token_limit,
+            "finish_reason": finish_reason,
+        }
+        logger.info("model_generation_finished", extra={"metrics": {
+            **self.generation_metrics,
+            "retry": retry,
+            "window_start_sec": frames[0].timestamp_sec,
+            "window_end_sec": frames[-1].timestamp_sec,
+        }})
         return service.processor.batch_decode(
             generated[:, inputs.input_ids.shape[1] :],
             skip_special_tokens=True,
@@ -200,12 +235,15 @@ class QwenObserver(ValidatedObserver):
         )[0]
 
 
-def create_observer(settings: Settings) -> Observer:
+def create_observer(settings: Settings, *, rule_guidance: str = "") -> Observer:
     if settings.inference_backend == "dmr":
         from app.services.dmr import DMRObserver
 
-        return DMRObserver(settings)
-    return QwenObserver(settings)
+        observer = DMRObserver(settings)
+    else:
+        observer = QwenObserver(settings)
+    observer.rule_guidance = rule_guidance
+    return observer
 
 
 class MockObserver:

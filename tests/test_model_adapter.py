@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock
 
 import numpy as np
+import pytest
 
 from app.services.inference import QwenObserver
 from app.services.model_loader import get_model
@@ -15,7 +16,8 @@ from app.services.prompts import SYSTEM_PROMPT
 from app.services.video import Frame
 
 
-def test_timestamped_processor_contract(monkeypatch, settings):
+@pytest.mark.parametrize("retry", [False, True])
+def test_timestamped_processor_contract(monkeypatch, settings, retry):
     from app.services import inference
 
     class Batch(dict):
@@ -51,19 +53,26 @@ def test_timestamped_processor_contract(monkeypatch, settings):
         Frame(1.25, np.zeros((56, 56, 3), np.uint8)),
         Frame(2.75, np.zeros((56, 56, 3), np.uint8)),
     ]
-    assert QwenObserver(settings).observe(frames, time.monotonic() + 10) == []
+    observer = QwenObserver(settings)
+    observer.rule_guidance = "Track hands and clothing pocket insertion."
+    assert observer._generate(frames, retry, time.monotonic() + 10) == '{"events": []}'
     messages = processor.apply_chat_template.call_args.args[0]
     assert messages[0] == {"role": "system", "content": SYSTEM_PROMPT}
     assert messages[1]["role"] == "user"
     content = messages[1]["content"]
     assert SYSTEM_PROMPT not in content[0]["text"]
-    schema = json.loads(content[0]["text"].split("JSON schema: ", 1)[1])
+    assert observer.rule_guidance in content[0]["text"]
+    schema = json.JSONDecoder().raw_decode(content[0]["text"].split("JSON schema: ", 1)[1])[0]
     assert "events" in schema["required"]
     assert "1.250000000" in content[1]["text"]
     assert "2.750000000" in content[3]["text"]
     assert len(processor.call_args.kwargs["images"]) == 2
     assert model.generate.call_args.kwargs["do_sample"] is False
     assert model.generate.call_args.kwargs["prefix_allowed_tokens_fn"] is prefix
+    assert model.generate.call_args.kwargs["max_new_tokens"] == (
+        settings.max_new_tokens * (2 if retry else 1)
+    )
+    assert observer.generation_metrics["output_tokens"] == 3
     constraint_builder.assert_called_once_with(tokenizer_data, [1.25, 2.75])
     assert processor.batch_decode.call_args.args[0].shape == (1, 3)
 

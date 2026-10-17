@@ -39,13 +39,16 @@ configured model server over HTTP. Keep DMR on your deployment host/network for
 local inference. Dependency, model, and inference-engine downloads are setup
 operations; prepare them before offline use. Rule matching uses local files.
 
-The default catalogue now contains conservative checks for paragraphs **20 and 22**
-and non-violation context for paragraph **32** of National Bank Resolution No. 231
-of 29 November 2019, [official act V1900019680](https://adilet.zan.kz/rus/docs/V1900019680).
-The paragraph text was retrieved from Adilet's public API; the retrieved excerpts,
-source URL, document ID, and content hash are recorded in
-`rules/sources/V1900019680.json`. This verifies the source text, not model accuracy
-or a legal conclusion about a recording. The earlier unrelated document URL is not used.
+The catalogue contains **11 entries: 4 potential-match checks and 7 review contexts**.
+It uses National Bank Resolution No. 231 of 29 November 2019,
+[V1900019680](https://adilet.zan.kz/rus/docs/V1900019680), and Resolution No. 14
+of 24 February 2020, [V2000020075](https://adilet.zan.kz/rus/docs/V2000020075).
+Texts and current-status flags were checked through Adilet's official API on
+2026-10-17. Excerpts, retrieval URLs, document IDs, and HTML hashes are recorded
+in `rules/sources/`. This verifies source text, not recognition accuracy or a
+legal conclusion about a recording. Research scope and exclusions are recorded
+in `rules/sources/research_scope.json` against sections 6–7 and FAQ 30–32 of the
+provided ForteBank case. The case supplies no exhaustive list of violation types.
 An empty catalogue (or one containing only context entries) still fails explicitly.
 
 ### What these rules can flag
@@ -55,7 +58,13 @@ An empty catalogue (or one containing only context entries) still fails explicit
 | P20 counting | Receipt of the same cash, initial counting visibly still in progress as the counterparty leaves, and continued counting with both areas visible | Client simply not visible, or a later recount after completed service |
 | P20 storage | Earlier receipt, its visible completion and a separate interaction, with the same earlier cash remaining on an open surface | Any cash on a desk during active handling |
 | P22 departure | Established counter operator and participant roles, actual operator departure, positive signs of interrupted cash service, participant remaining | Empty chair, waiting person, occlusion, or merely no evidence that service ended |
+| P20 clothing storage | Same previously received banknotes tracked after receipt completion into a visible operator clothing pocket | Reaching below the desk, touching clothing, an obscured object or unverified cash origin |
 | P32 packaging | Context for reviewing a banknote package handover | No visible counting; this never creates a violation by itself |
+| P12 personal items | Context for phone use and item placement in the cash area | Ownership, camera capability, permitted medical items and zone boundaries require verification |
+| P19 receipt / P31 issuance | Context for transfer direction, counting, document handover and participant presence | Sparse frames cannot prove a required step was skipped; P32 packaging exceptions apply |
+| P24 collection bag | Context for visible bag handover, inspection and seal area | Clothing alone cannot identify a collector; obscured seals and unseen paperwork remain unknown |
+| P35 client movement | Context for receiving cash, counting and leaving the counter | Counting may occur in a designated room under another worker's supervision |
+| No.14 P8 service entrance | Context for doorway crossings and door movement | A closable entrance is an equipment requirement; an open door alone is not a violation |
 
 The vision model returns positive `facts` with supporting supplied-frame timestamps and material
 `uncertainties`. Missing facts mean unknown. Every required fact must be supported
@@ -66,7 +75,7 @@ frames cannot establish that counting never happened, so P32 is context-only.
 This conservative approach can miss events whose necessary context spans longer
 than a window; it does not invent unseen context to compensate.
 
-The jury response remains unchanged. `/api/v1/jobs/{id}/details` additionally returns
+The required jury response fields are preserved. `/api/v1/jobs/{id}/details` also returns
 `context_matches`, `regulatory_assessment`, and `review_required`. A `no_violation`
 response means no supported rule match, even when `review_required` is true; it is
 not proof of compliance. Review the details for uncertain or packaging-related cases.
@@ -272,7 +281,7 @@ All settings use environment variables or `.env`; `.env.example` lists defaults.
 | `MODEL_HTTP_TIMEOUT_SEC` | DMR total request timeout, default 120 seconds; capped by remaining job budget |
 | `QWEN_MODEL_PATH`, `MODEL_DEVICE` | Local backend only: existing checkpoint; `cpu` or `cuda` |
 | `MODEL_QUANTIZATION` | Local backend only: `none`, `4bit`, or `8bit`; quantization requires CUDA |
-| `MAX_NEW_TOKENS`, `MAX_FRAMES_PER_WINDOW` | Generation cap 512; input cap 12 |
+| `MAX_NEW_TOKENS`, `MAX_FRAMES_PER_WINDOW` | Generation cap 512 (local Qwen retries allow twice this); input cap 12 |
 | `GENERATION_RETRIES` | Retry malformed JSON once by default, max 2 |
 | `MAX_REFINEMENT_WINDOWS` | Bound additional inspection, default 8 |
 | `PROCESSING_BUDGET_SEC` | Default 300-second worker timeout; bounds stages, local generation, and DMR requests/retries |
@@ -315,10 +324,16 @@ retry; persistent failure fails the job, preventing false all-clear results.
 The local Qwen adapter also constrains decoding with `lm-format-enforcer`: its
 per-window JSON schema permits only supplied timestamps for event boundaries,
 evidence, and facts. The tokenizer vocabulary index is cached with the model.
+Generation limits descriptions to 240 characters and individual uncertainty notes
+to 120 characters, so verbose text does not consume the budget before the JSON
+can close. Stored/API observations retain their older, larger text limits.
+Local retries allow twice `MAX_NEW_TOKENS`, still within the same job deadline.
 Post-generation validation still checks event ordering, evidence bounds, and all
 other observation requirements. Validation failures report a category
-(`invalid_json`, `schema_mismatch`, or `ungrounded_timestamp`); worker logs include
-the attempt and window bounds without recording the generated scene text.
+(`invalid_json`, `output_token_limit`, `schema_mismatch`, or `ungrounded_timestamp`);
+worker logs include the attempt, window bounds, generated token count and stop
+reason without recording the generated scene text. Truncated JSON is never repaired
+into a successful analysis or treated as an empty observation list.
 
 Consolidation requires matching action type and object set, overlapping/nearby
 times, and description similarity ≥0.8. It keeps an existing description verbatim.
@@ -350,6 +365,9 @@ Each entry requires:
 - `applicability` documenting why a purely visual match is sufficient to flag a
   **potential** violation in this deployment, and `explanation_template` as plain
   explanatory text (no executable template interpolation).
+- `observation_guidance` with concise visible-action instructions. The worker feeds
+  these local registry targets to both Qwen and DMR. Legal conclusions still come
+  from grounded rule matching and human review, not model-generated legal text.
 
 Supported conditions are `objects_all`, `min_duration_sec`, `min_confidence`,
 `facts_all`, and `require_no_uncertainties`. `kind: context` entries never generate
@@ -372,6 +390,11 @@ the supported visible conditions must wait for an appropriate implementation.
 Every analysis, status, and detail request requires `X-API-Key`. Never expose the
 shared secret in a public Next.js client bundle; proxy requests from a server route.
 
+`GET /api/v1/rules` requires the same key and returns the catalogue loaded by the API,
+`configured`, and `review_required`. The UI reads it through its server proxy;
+loading, actual emptiness, and network failure are distinct states. Restart API and
+worker together after editing rules so the displayed and inference catalogues agree.
+
 ```bash
 curl -X POST http://localhost:8000/api/v1/analyze \
   -H "X-API-Key: $API_KEY" -F 'file=@recording.mov'
@@ -384,14 +407,37 @@ Upload streaming is size-limited; extension validation happens immediately and
 actual video validation occurs in the worker. Therefore corrupted `.mov` content
 receives a job ID and later a `failed` status. Processing never runs in the request.
 `processing` covers queued and running jobs. Completed responses preserve the jury
-contract, with `type`, `timecode_sec`, `description`, and `evidence_frames`:
+contract, with `type`, `timecode_sec`, `description`, and `evidence_frames`.
+Every completed result now includes a preliminary assessment:
 
 ```json
-{"job_id":"<uuid>","status":"done","verdict":"no_violation","violations":[]}
+{
+  "job_id": "<uuid>",
+  "status": "done",
+  "verdict": "no_violation",
+  "violations": [],
+  "assessment": {
+    "status": "no_supported_match",
+    "review_required": true,
+    "decision_status": "pending_human_review"
+  }
+}
 ```
 
 `no_violation` means no match within the configured rule catalogue and sampled
 observations; it does not certify compliance with every Kazakhstan regulation.
+`verdict` is deprecated and retained for compatibility. Clients should display
+`assessment.status`: `potential_violation` or `no_supported_match`. Both require
+human review, including when no events were extracted. This API does not record or
+automatically produce a human's final decision.
+
+Each candidate in `violations` includes `confidence` (0–1),
+`confidence_kind: "self_reported_observation"`, and `uncertainties`. The score is
+the model's self-assessment of the supporting action, **not** a calibrated
+probability of a violation or of compliance. The UI displays it as an index out
+of 100. Legacy results can lack a score; missing scores must not become zero.
+There is no aggregate decision probability until a classifier is calibrated and
+evaluated on held-out labelled videos. Even a score of 1 does not bypass review.
 Failures include a safe `error` and omit verdict/violations. Unknown or expired jobs
 return 404; wrong/missing keys return 401. Redis outages return 503. Audit details
 contain observations, matched source snapshots, motion intervals, and timing metrics.

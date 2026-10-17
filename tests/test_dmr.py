@@ -64,6 +64,7 @@ def test_timestamped_images_and_request(dmr_settings, frames):
         content = data["messages"][0]["content"]
         assert len(content) == 5
         assert "Supplied timestamps: [1.25, 2.75]" in content[0]["text"]
+        assert "Track both participants' movements." in content[0]["text"]
         for index, frame in enumerate(frames):
             assert content[1 + 2 * index]["text"] == f"Timestamp {frame.timestamp_sec:.9f} seconds"
             part = content[2 + 2 * index]
@@ -79,6 +80,7 @@ def test_timestamped_images_and_request(dmr_settings, frames):
         return completion()
 
     observer = DMRObserver(dmr_settings, httpx.MockTransport(handle))
+    observer.rule_guidance = "Track both participants' movements."
     assert observer.observe(frames, time.monotonic() + 30) == []
 
 

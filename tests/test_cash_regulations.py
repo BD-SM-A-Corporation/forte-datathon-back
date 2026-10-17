@@ -37,22 +37,29 @@ def observation(rule, **updates):
 
 def test_source_and_configured(production_rules):
     assert production_rules.configured
-    assert len(production_rules.catalogue.rules) == 4
+    assert len(production_rules.catalogue.rules) == 11
+    assert sum(r.kind == "potential_violation" for r in production_rules.catalogue.rules) == 4
     assert {r.source.section for r in production_rules.catalogue.rules} == {
         "Глава 2, пункт 20",
         "Глава 2, пункт 22",
         "Глава 2, пункт 32",
+        "Глава 2, пункт 12",
+        "Глава 2, пункт 19",
+        "Глава 2, пункт 24",
+        "Глава 2, пункт 31",
+        "Глава 2, пункт 35",
+        "Глава 3, пункт 8",
     }
-    assert all(r.source.url.endswith("V1900019680") for r in production_rules.catalogue.rules)
-    source = json.loads((CATALOGUE.parent / "sources/V1900019680.json").read_text())
-    assert source["is_actual"] is True
-    assert all(
-        r.source.excerpt == source["clauses"][r.source.section.split()[-1]]
-        for r in production_rules.catalogue.rules
-    )
+    for rule in production_rules.catalogue.rules:
+        document = rule.source.url.rsplit("/", 1)[-1]
+        source = json.loads((CATALOGUE.parent / f"sources/{document}.json").read_text())
+        assert source["is_actual"] is True
+        assert rule.source.excerpt == source["clauses"][rule.source.section.split()[-1]]
+        assert rule.source.section == source["clause_locations"][rule.source.section.split()[-1]]
+        assert rule.observation_guidance
 
 
-@pytest.mark.parametrize("index", [0, 1, 2])
+@pytest.mark.parametrize("index", [0, 1, 2, 4])
 def test_all_facts_required(production_rules, index):
     rule = production_rules.catalogue.rules[index]
     event = observation(rule)
@@ -88,7 +95,7 @@ def test_p32_not_a_violation_even_without_visible_counting(production_rules):
     for facts in ({}, {"package_appears_intact": [1]}, {"counting_not_visible": [1]}):
         event = observation(rule, facts=facts)
         assert production_rules.match(event) == []
-        assert production_rules.context(event) == [rule]
+        assert rule in production_rules.context(event)
         assert production_rules.needs_review(event)
 
 
@@ -148,3 +155,20 @@ def test_p32_full_pipeline_is_review_context(video, settings, production_rules):
     assert output.details["context_matches"][0]["rule"]["id"] == "KZ_231_P32_PACKAGING_CONTEXT"
     assert output.details["regulatory_assessment"] == "no_supported_match"
     assert output.details["review_required"] is True
+
+
+@pytest.mark.parametrize("event_type", [
+    "cash_pocketing", "phone_interaction", "bag_inspection", "counterparty_leaving",
+    "cash_zone_entry", "door_opening",
+])
+def test_movements_without_grounded_facts_never_flag(production_rules, event_type):
+    event = observation(production_rules.catalogue.rules[0], event_type=event_type, facts={})
+    assert production_rules.match(event) == []
+
+
+def test_catalogue_supplies_visible_targets(production_rules):
+    guidance = production_rules.observation_guidance()
+    assert "cash_pocketing" in guidance
+    assert "clothing_pocket_storage_visible" in guidance
+    assert "phone_interaction" in guidance
+    assert "Do not" in guidance

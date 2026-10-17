@@ -20,8 +20,11 @@ def get_pipeline() -> Pipeline:
     global _pipeline
     if _pipeline is None:
         settings = Settings()
+        rules = RuleEngine.load(settings.rules_path)
         _pipeline = Pipeline(
-            settings, create_observer(settings), RuleEngine.load(settings.rules_path)
+            settings,
+            create_observer(settings, rule_guidance=rules.observation_guidance()),
+            rules,
         )
     return _pipeline
 

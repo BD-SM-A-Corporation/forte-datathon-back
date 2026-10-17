@@ -21,8 +21,11 @@ def main() -> None:
     parser.add_argument("--repeat", type=int, default=1)
     args = parser.parse_args()
     settings = Settings()
-    observer = MockObserver() if args.mock else create_observer(settings)
     rules = RuleEngine.load(settings.rules_path)
+    observer = (
+        MockObserver() if args.mock
+        else create_observer(settings, rule_guidance=rules.observation_guidance())
+    )
     # Mock benchmarking still requires a configured test/verified catalogue; never bypass verdict checks.
     pipeline = Pipeline(settings, observer, rules)
     runs = []

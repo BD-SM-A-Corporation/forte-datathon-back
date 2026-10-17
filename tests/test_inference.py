@@ -110,3 +110,33 @@ def test_invalid_json_reason_reaches_log_and_client(frames, settings, caplog):
         observer.observe(frames, time.monotonic() + 30)
     assert caplog.records[-1].metrics["reason"] == "invalid_json"
     assert caplog.records[-1].metrics["attempt"] == 2
+
+
+def test_truncated_generation_fails_closed_with_specific_reason(frames, settings, caplog):
+    observer = QwenObserver(settings)
+
+    def generate(*args):
+        observer.generation_metrics = {
+            "finish_reason": "length", "output_tokens": 512, "token_limit": 512,
+        }
+        return '{"events": [{"description": "unfinished'
+
+    observer.generate = generate
+    with pytest.raises(InferenceError, match="output_token_limit"):
+        observer.observe(frames, time.monotonic() + 30)
+    assert caplog.records[-1].metrics["output_tokens"] == 512
+
+
+def test_generation_diagnostics_do_not_leak_into_next_attempt(frames, settings, caplog):
+    observer = QwenObserver(settings)
+
+    def generate(frames, retry, deadline):
+        if not retry:
+            observer.generation_metrics = {"finish_reason": "length"}
+        return '{"events": ['
+
+    observer.generate = generate
+    with pytest.raises(InferenceError, match="invalid_json"):
+        observer.observe(frames, time.monotonic() + 30)
+    assert caplog.records[0].metrics["reason"] == "output_token_limit"
+    assert caplog.records[1].metrics["reason"] == "invalid_json"
