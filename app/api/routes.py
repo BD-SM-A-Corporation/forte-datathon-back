@@ -1,22 +1,37 @@
 import asyncio
 import os
 import uuid
-import aiofiles
 from pathlib import Path
-from typing import Optional, List
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Header, BackgroundTasks, status
+from typing import List, Optional
+
+import aiofiles
+from fastapi import (
+    APIRouter,
+    BackgroundTasks,
+    Depends,
+    File,
+    Header,
+    HTTPException,
+    UploadFile,
+    status,
+)
 from fastapi.responses import FileResponse
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy.orm import selectinload
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.database import get_db
-from app.models import Job, Violation, JobStatus, Verdict
-from app.schemas import JobResponse, ViolationResponse, AnalyzeInitiateResponse, RuleItem
+from app.models import Job, JobStatus, Verdict, Violation
+from app.pipeline.evidence import EvidenceRenderer
 from app.pipeline.rules_engine import rules_engine
 from app.pipeline.worker import process_video_job
-from app.pipeline.evidence import EvidenceRenderer
+from app.schemas import (
+    AnalyzeInitiateResponse,
+    JobResponse,
+    RuleItem,
+    ViolationResponse,
+)
 
 router = APIRouter()
 
@@ -113,6 +128,7 @@ async def get_job_status(
         if v.frame_path and os.path.exists(v.frame_path):
             try:
                 import cv2
+
                 img = cv2.imread(v.frame_path)
                 if img is not None:
                     b64 = EvidenceRenderer.frame_to_base64(img)
@@ -163,11 +179,17 @@ async def get_evidence_frame(
     db: AsyncSession = Depends(get_db),
 ):
     """Serves the JPEG keyframe evidence for a specific violation."""
-    stmt = select(Violation).where(Violation.id == violation_id, Violation.job_id == job_id)
+    stmt = select(Violation).where(
+        Violation.id == violation_id, Violation.job_id == job_id
+    )
     result = await db.execute(stmt)
     violation = result.scalar_one_or_none()
 
-    if not violation or not violation.frame_path or not os.path.exists(violation.frame_path):
+    if (
+        not violation
+        or not violation.frame_path
+        or not os.path.exists(violation.frame_path)
+    ):
         raise HTTPException(status_code=404, detail="Evidence frame not found")
 
     return FileResponse(violation.frame_path, media_type="image/jpeg")
