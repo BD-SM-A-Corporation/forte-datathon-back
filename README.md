@@ -115,7 +115,37 @@ weights. DMR manages model loading and residency in its own inference engine.
 
 ## Local backend: download the checkpoint in advance
 
-On an internet-connected setup machine:
+Docker Compose includes a one-off `model-init` service. It downloads the pinned
+`Qwen/Qwen2.5-VL-3B-Instruct` revision into `MODEL_WEIGHTS_DIR` (default `./weights`).
+The worker waits for successful completion; API and worker retain offline loading.
+Weights are approximately 7.5 GB and are stored outside the images. Initial setup
+requires internet access and sufficient disk space for weights and Docker images.
+
+To download independently of starting the backend:
+
+```bash
+docker compose run --rm --build model-init
+# Or start everything; Compose runs model-init before starting the worker:
+docker compose up -d --build
+docker compose logs -f model-init
+```
+
+The initializer validates required files, records SHA-256 hashes in
+`.forte-checkpoint.json`, and checks those hashes on subsequent runs without
+contacting Hugging Face. This reads all weights and can take time on slow disks.
+Interrupted downloads can resume by rerunning the initializer. A completed
+checkpoint with corruption or a different revision fails: select a fresh
+`MODEL_WEIGHTS_DIR` and recreate the services to avoid changing in-use weights.
+`QWEN_MODEL_REVISION` must be a full commit SHA; the default is
+`66285546d2b821cf421d4f5eb2576359d3770cd3`. Hashes detect changes after preparation;
+they do not replace a real model inference smoke test.
+
+For an air-gapped deployment, prepare the directory on a connected machine, copy
+the entire weights directory **including hidden files and the completion marker**,
+and set `MODEL_INIT_OFFLINE=1`. Also stage Docker images beforehand. The setup
+container writes the mounted directory as root; inference mounts it read-only.
+
+For non-Docker development, manual download is also supported:
 
 ```bash
 pip install 'huggingface_hub[cli]'
@@ -125,8 +155,9 @@ HF_HUB_OFFLINE=0 TRANSFORMERS_OFFLINE=0 hf download \
 
 Copy the entire directory, including processor/tokenizer files and all safetensor
 shards, to the offline machine. Set `QWEN_MODEL_PATH` to that local directory.
-For reproducible evaluation use `hf download --revision <commit-sha>` and record
-that SHA with the benchmark. Model loading uses `local_files_only=True`, disables
+For reproducible evaluation pass `--revision 66285546d2b821cf421d4f5eb2576359d3770cd3`
+and record that SHA with the benchmark. Compose still requires running model-init
+to prepare its completion marker. Model loading uses `local_files_only=True`, disables
 remote code, and enables `HF_HUB_OFFLINE` and `TRANSFORMERS_OFFLINE`. A missing or
 incompatible checkpoint fails clearly; there is no alternate-model fallback.
 
@@ -366,7 +397,7 @@ bounded result retention. Keep Redis private: RQ is a trusted internal queue.
 
 ```bash
 cp .env.example .env
-# Set API_KEY, stage weights, and supply verified regulations.
+# Set API_KEY and review verified regulations; model-init stages weights automatically.
 docker compose up -d --build
 # With NVIDIA Container Toolkit and a suitable host NVIDIA driver:
 docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d --build
@@ -377,8 +408,8 @@ FRONTEND_IMAGE=your-nextjs-image:tag docker compose --profile frontend up -d
 The GPU override reserves one NVIDIA GPU for the worker. Set
 `MODEL_QUANTIZATION=4bit` in `.env` and install the quantization extra for 4-bit mode.
 API and worker share one image and upload volume; models and rules are read-only
-bind mounts. Redis persists to its own volume and binds its host port only to loopback. All services
-restart automatically. Worker health allows an entire processing budget between
+bind mounts. Redis persists to its own volume and binds its host port only to loopback. Long-running services
+restart automatically; model-init exits after setup and has no restart policy. Worker health allows an entire processing budget between
 heartbeats because SimpleWorker does not heartbeat during a job.
 
 For CPU-only infrastructure development or DMR, build with `INSTALL_MODEL=false`.
