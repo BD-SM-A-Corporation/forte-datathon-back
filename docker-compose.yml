@@ -1,0 +1,26 @@
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: forte_backend
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - ENVIRONMENT=production
+      - API_KEY=${API_KEY:-forte_hackathon_jury_secret_key}
+      - DATABASE_URL=sqlite+aiosqlite:///storage/db.sqlite3
+      - UPLOAD_DIR=storage/uploads
+      - FRAMES_DIR=storage/frames
+      - RULES_PATH=rules/rules.yaml
+      - DEVICE=cpu
+    volumes:
+      - ./storage:/app/storage
+      - ./weights:/app/weights
+      - ./rules:/app/rules
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
